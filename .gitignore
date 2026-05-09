@@ -15,3 +15,4 @@ dnn_workloads/
 .venv
 .vence
 .idea
+.python-version
