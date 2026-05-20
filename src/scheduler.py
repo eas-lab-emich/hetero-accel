@@ -237,9 +237,7 @@ class Scheduler:
                 # write the maximum weight (capacity) of each bin (agent)
                 f.write(' '.join([str(int(capacity)) for capacity in capacities]))
 
-        logger.info(f"Accelerators: {bins}")
         weight_latencies = ", ".join([f"(network={key[0]}, accel={key[1].precision} bits, latency={value})" for key, value in weight_dict.items()])
-        logger.info(f"Weights/latencies: {weight_latencies}")
         schedule = Schedule(bins)
 
         if max_capacity:
@@ -264,7 +262,6 @@ class Scheduler:
                 min(latencies) for latencies in latencies_per_item if latencies
             )
             capacities = [int(alpha * n_speed * best_case_latency) for n_speed in normalized_speeds]
-            logger.info(f"capacities={capacities}")
 
         solver_dir = os.path.join(project_dir, 'generalizedassignmentsolver')
         logdir = logging.getLogger().logdir

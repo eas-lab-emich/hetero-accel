@@ -1,3 +1,6 @@
+from math import ceil
+from random import uniform
+
 import crimson_magick.cifar_zoo
 import yaml
 import os
@@ -102,7 +105,7 @@ class TimeloopWrapper:
                      f"with exitcode: {p.returncode}")
         return p
 
-    def get_results(self, problem_name):
+    def get_results(self, problem_name) -> TimeloopStats:
         """Get the results of a succesfull run from Timeloop. Note, timeloop provides
            a script that does a more analytical parsing: 
            https://github.com/NVlabs/timeloop/blob/master/scripts/parse_timeloop_output.py#L55
@@ -971,7 +974,7 @@ class TimeloopMapper:
         # update the configuration with new parameters
         self.get_config()
 
-def timeloop_execution(timeloop_wrapper: TimeloopWrapper, problem_name: str):
+def timeloop_execution(timeloop_wrapper: TimeloopWrapper, problem_name: str) -> TimeloopStats:
     logger.debug(f"\t\t\tEvaluating layer/problem: {problem_name}")
     timeloop_wrapper.run(problem_name)
     results = timeloop_wrapper.get_results(problem_name)
@@ -979,6 +982,16 @@ def timeloop_execution(timeloop_wrapper: TimeloopWrapper, problem_name: str):
                  f"energy={results.energy:.3e}, latency={results.cycles:.3e}, edp={results.edp:.3e}")
     timeloop_wrapper.cleanup(problem_name)
     return results
+
+def timeloop_execution_mock(timeloop_wrapper: TimeloopWrapper, problem_name: str) -> TimeloopStats:
+    energy_base=6.608e+04
+    latency_base=3.303e+07
+    area_base = 12.715
+    energy = uniform(energy_base - 1e4, energy_base + 1e4)
+    latency = ceil(uniform(latency_base - 1e7, latency_base + 1e7))
+    area = uniform(area_base - 1, area_base + 1)
+    return TimeloopStats(gflops=None, utilization=None, energy=energy, cycles=latency,
+                            edp=energy * latency, area=area)
 
 if __name__ == "__main__":
     logging.basicConfig(level=logging.DEBUG)

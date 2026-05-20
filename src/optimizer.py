@@ -15,7 +15,7 @@ from src.evaluation_result import EvaluationResult
 from src.logging.subaccelerator_params_logger import SubacceleratorParamsLogger
 from src.logging.accelerator_metric_logger import AcceleratorMetricLogger
 from src.scheduler import Scheduler
-from src.timeloop import TimeloopWrapper, timeloop_execution
+from src.timeloop import TimeloopWrapper, timeloop_execution, timeloop_execution_mock
 from src.utils import get_contents_table
 
 __all__ = ['DesignSpace', 'AcceleratorOptimizer']
@@ -288,11 +288,12 @@ class AcceleratorOptimizer(Annealer):
             m, s = divmod(s, 60)  # split remainder into minutes and seconds
             return '%4i:%02i:%02i' % (h, m, s)
 
-        elapsed = time() - self.start
-        remain = (self.steps - step) * (elapsed / step)
-        logger.info(f"Update --> temperature={T:8.3e}, energy_metric={E:8.3e}, "
-                    f"accept={acceptance:6.2%}, improvement={improvement:6.2%},"
-                    f"time_elapsed={time_string(elapsed)}, time_remaining={time_string(remain)}")
+        if step != 0:
+            elapsed = time() - self.start
+            remain = (self.steps - step) * (elapsed / step)
+            logger.info(f"Update --> temperature={T:8.3e}, energy_metric={E:8.3e}, "
+                        f"accept={acceptance:6.2%}, improvement={improvement:6.2%},"
+                        f"time_elapsed={time_string(elapsed)}, time_remaining={time_string(remain)}")
 
         evaluation_result = self.latest_evaluation_result if self.latest_evaluation_result else EvaluationResult.UNKNOWN
         edp = (
@@ -398,7 +399,6 @@ class AcceleratorOptimizer(Annealer):
 
         if not initial:  # FIXME get rid of unnecessarily running first step twice.
             self.schedule_history.append(self.latest_schedule)
-            logger.info(f"scheduleHistory={self.schedule_history}")
 
         if edp is None:
             return math.inf
@@ -474,7 +474,8 @@ class AcceleratorOptimizer(Annealer):
                 # iterate over each timeloop problem (layer) of the DNN
                 with ThreadPoolExecutor(max_workers=32) as executor:
                     tasks = {
-                        executor.submit(timeloop_execution, self.timeloop_wrapper, problem_name): problem_name
+                        # executor.submit(timeloop_execution, self.timeloop_wrapper, problem_name): problem_name
+                        executor.submit(timeloop_execution_mock, self.timeloop_wrapper, problem_name): problem_name
                         for problem_name in self.timeloop_problems_per_dnn[arch]
                     }
 
