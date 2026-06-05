@@ -16,7 +16,7 @@ from src.net_wrapper import TorchNetworkWrapper
 from src.compression.compressor import PruningQuantizationCompressor
 from src.dataset import load_data
 from src.accelerator_cfg import AcceleratorProfile
-from src.optimizer import AcceleratorOptimizer
+from src.optimization.optimizer import AcceleratorOptimizer
 from src.baseline import run_baseline
 from src.sota import run_sota
 from src.partition import run_partition_comparison

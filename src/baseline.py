@@ -1,12 +1,10 @@
 import logging
 import os.path
-from time import time
 from collections import OrderedDict
 from src.accelerator_cfg import AcceleratorProfile
-from src.scheduler import Scheduler
-from src.optimizer import AcceleratorOptimizer
+from src.optimization.optimizer import AcceleratorOptimizer
 from src.args import MetricType
-
+from src.optimization.scheduling import Scheduler
 
 logger = logging.getLogger(__name__)
 

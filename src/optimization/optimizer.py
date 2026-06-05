@@ -14,7 +14,9 @@ from simanneal import Annealer
 from src.evaluation_result import EvaluationResult
 from src.logging.subaccelerator_params_logger import SubacceleratorParamsLogger
 from src.logging.accelerator_metric_logger import AcceleratorMetricLogger
-from src.scheduler import Scheduler, SolverType
+
+from src.optimization.evaluation import SchedulePenalizer
+from src.optimization.scheduling import SolverType, Scheduler
 from src.timeloop import TimeloopWrapper, timeloop_execution, timeloop_execution_mock
 from src.utils import get_contents_table
 
@@ -69,25 +71,6 @@ class DesignSpace(SimpleNamespace):
         return self.accelerator_state_class(*values_to_get)
 
 
-lambda_1 = 1.1
-
-
-def compute_p3(schedules):
-    c = 1e17  # huge c to signal annealing there's a huge problem
-    lookback_window = 4
-    enforced_precision = 8
-    if len(schedules) < lookback_window:
-        return 0
-    lookback = schedules[-lookback_window:]
-    for s in lookback:
-        if not s or not s.assigned:
-            continue
-        for a in s.assigned.values():
-            if a.precision == enforced_precision:
-                return 0
-    return c
-
-
 class AcceleratorOptimizer(Annealer):
     """
     Implementation of the annealing optimizer for heterogeneous accelerators.
@@ -128,7 +111,7 @@ class AcceleratorOptimizer(Annealer):
         self.init_timeloop(args.layer_type_whitelist)
         # initialize scheduler
         self.scheduler = Scheduler(args.scheduler_type)
-        self.schedule_history = []
+        self.schedule_penalizer = SchedulePenalizer()
 
         initial_state = self.get_initial_state()
         super().__init__(initial_state, getattr(args, 'simanneal_load_state', None))
@@ -402,13 +385,10 @@ class AcceleratorOptimizer(Annealer):
             else None
         )
 
-        if not initial:  # FIXME get rid of unnecessarily running first step twice.
-            self.schedule_history.append(self.latest_schedule)
-
         if edp is None:
             return math.inf
 
-        return edp + lambda_1 * compute_p3(self.schedule_history)
+        return edp + self.schedule_penalizer.penalize(self.latest_schedule)
 
     def _evaluation(self) -> EvaluationResult:
         """Evaluate the fitness of the current state
@@ -479,8 +459,8 @@ class AcceleratorOptimizer(Annealer):
                 # iterate over each timeloop problem (layer) of the DNN
                 with ThreadPoolExecutor(max_workers=32) as executor:
                     tasks = {
-                        # executor.submit(timeloop_execution, self.timeloop_wrapper, problem_name): problem_name
-                        executor.submit(timeloop_execution_mock, self.timeloop_wrapper, problem_name): problem_name
+                        executor.submit(timeloop_execution, self.timeloop_wrapper, problem_name): problem_name
+                        # executor.submit(timeloop_execution_mock, self.timeloop_wrapper, problem_name): problem_name
                         for problem_name in self.timeloop_problems_per_dnn[arch]
                     }
 

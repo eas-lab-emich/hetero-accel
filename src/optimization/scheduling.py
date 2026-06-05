@@ -4,20 +4,18 @@ import random
 import re
 import subprocess
 import numpy as np
-from collections import OrderedDict, namedtuple, deque
+from collections import namedtuple, deque, OrderedDict
 from enum import Enum
 from time import time
-# matplotlib imports
 import matplotlib as mpl
 
 mpl.rcParams.update(mpl.rcParamsDefault)
 from matplotlib import pyplot as plt
-from matplotlib import rcParams
 from src import project_dir
 
 
 __all__ = ['SchedulerType', 'ScheduleEntry', 'Schedule',
-           'SolverType', 'solver_args_dict'
+           'SolverType', 'solver_args_dict',
            'Scheduler']
 
 logger = logging.getLogger(__name__)
@@ -73,7 +71,7 @@ class Schedule:
         """
         # rcParams.update({
         #     # 'text.latex.preamble': r"\usepackage{lmodern}",
-        #     'font.size': "7",    
+        #     'font.size': "7",
         #     "text.usetex": True,
         #     "font.family": "lmodern",
         #     "font.serif": ["Computer Modern Roman"]
@@ -283,7 +281,7 @@ class Scheduler:
                   f"2>&1 | tee {logfile}"
         logger.debug(f"GeneralizedAssignmentSolver command:\n{command}")
 
-        # run command 
+        # run command
         start = time()
         p = subprocess.run(command, shell=True, check=True, capture_output=True, text=True)
         logger.debug(f"Executed solver command in {time() - start:.3e} with exitcode: {p.returncode}")
@@ -351,7 +349,7 @@ class Scheduler:
                 assert weight_next_item >= 0
 
                 # the response time is the sum of the current workload of the agent (bin),
-                #  the total weight of the items on the bin's ready list and the weight of 
+                #  the total weight of the items on the bin's ready list and the weight of
                 #  the current item to-be-assigned
                 response_time[next_item][available_bin] = bin_workload + weight_ready_list + weight_next_item
 
@@ -409,7 +407,7 @@ class Scheduler:
                         schedule.add(item=partition.tag + f'_{subpartition_index}',
                                      to_bin=selected_bin,
                                      duration=duration,
-                                     # make sure that the subpartition would be executed 
+                                     # make sure that the subpartition would be executed
                                      # not before the previous one from the same partition
                                      # has finished
                                      start=track_partition_execution[partition.tag])
@@ -428,7 +426,6 @@ class Scheduler:
 if __name__ == "__main__":
 
     logging.basicConfig(level=logging.DEBUG)
-    from collections import OrderedDict
     from src.accelerator_cfg import EyerissAcceleratorState
 
     solver_type = SolverType.MTHGGreedyRegret

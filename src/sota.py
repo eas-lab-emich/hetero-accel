@@ -1,13 +1,11 @@
 import logging
 import os.path
 import pickle
-from time import time
 from shutil import copy
 from src.accelerator_cfg import AcceleratorProfile
-from src.scheduler import Scheduler, SchedulerType
-from src.optimizer import AcceleratorOptimizer
+from src.optimization.optimizer import AcceleratorOptimizer
 from src.args import MetricType
-
+from src.optimization.scheduling import Scheduler, SchedulerType
 
 logger = logging.getLogger(__name__)
 

@@ -5,16 +5,14 @@ import random
 import re
 import pandas as pd
 from time import time
-from shutil import copy
 from copy import deepcopy
 from collections import namedtuple, OrderedDict
 from types import SimpleNamespace
 from glob import glob
 from src.accelerator_cfg import AcceleratorProfile
-from src.scheduler import Scheduler, SchedulerType
 from src.baseline import BaselineEvaluator
 from src.args import MetricType
-
+from src.optimization.scheduling import SchedulerType
 
 logger = logging.getLogger(__name__)
 

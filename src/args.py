@@ -1,9 +1,8 @@
 import argparse
-import numpy as np
 from enum import Enum
 from src.accelerator_cfg import AcceleratorType
 from src.compression.pruning import PruningGroupType
-from src.scheduler import SchedulerType, SolverType
+from src.optimization.scheduling import SchedulerType, SolverType
 
 
 def app_args(parser):

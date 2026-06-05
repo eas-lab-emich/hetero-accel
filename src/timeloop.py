@@ -8,7 +8,6 @@ import shutil
 import logging
 import subprocess
 import re
-import numpy as np
 from time import time
 from copy import deepcopy
 from glob import glob
@@ -23,7 +22,7 @@ from src.accelerator_cfg import AcceleratorType
 from src.args import OptimizerType
 from src.utils import force_quotes_on_str
 
-__all__ = ['TimeloopStats', 'TimeloopWrapper', 'TimeloopTemplate', 'TimeloopProblem', 'TimeloopArch', 'TimeloopMapper', 'timeloop_execution']
+__all__ = ['TimeloopStats', 'TimeloopWrapper', 'TimeloopTemplate', 'TimeloopProblem', 'TimeloopArch', 'TimeloopMapper', 'timeloop_execution', 'timeloop_execution_mock']
 
 logger = logging.getLogger(__name__)
 

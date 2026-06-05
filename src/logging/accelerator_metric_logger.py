@@ -2,7 +2,7 @@ from collections import defaultdict
 
 from src.evaluation_result import EvaluationResult
 from src.logging.metric_logger import MetricLogger
-from src.scheduler import Schedule
+from src.optimization.scheduling import Schedule
 
 
 class AcceleratorMetricLogger(MetricLogger):
