@@ -6,7 +6,7 @@ class SubacceleratorParamsLogger(MetricLogger):
     def __init__(self, base_dir):
         super().__init__(base_dir, "subaccelerator_params_metrics.csv")
         self._write_row(
-            ["iteration",
+            ["step",
              "is_improved",
              "precision",
              "pe_array_x",
@@ -22,7 +22,7 @@ class SubacceleratorParamsLogger(MetricLogger):
         self._check_closed()
         self._write_row([
             iteration,
-            is_improved,
+            self._format_bool(is_improved),
             precision,
             pe_array_x,
             pe_array_y,

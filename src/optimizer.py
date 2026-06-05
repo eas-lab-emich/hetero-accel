@@ -14,13 +14,14 @@ from simanneal import Annealer
 from src.evaluation_result import EvaluationResult
 from src.logging.subaccelerator_params_logger import SubacceleratorParamsLogger
 from src.logging.accelerator_metric_logger import AcceleratorMetricLogger
-from src.scheduler import Scheduler
+from src.scheduler import Scheduler, SolverType
 from src.timeloop import TimeloopWrapper, timeloop_execution, timeloop_execution_mock
 from src.utils import get_contents_table
 
 __all__ = ['DesignSpace', 'AcceleratorOptimizer']
 
 logger = logging.getLogger(__name__)
+
 
 class DesignSpace(SimpleNamespace):
     """Wrapper for the design space of possible accelerator architectures
@@ -88,7 +89,10 @@ def compute_p3(schedules):
 
 
 class AcceleratorOptimizer(Annealer):
-    """Wrapper for Simulated Annealing optimizer
+    """
+    Implementation of the annealing optimizer for heterogeneous accelerators.
+
+
     """
 
     def __init__(self,
@@ -97,7 +101,8 @@ class AcceleratorOptimizer(Annealer):
                  accelerator_cfg,
                  workload,
                  accuracy_lut,
-                 hw_constraints
+                 hw_constraints,
+                 logdir
                  ):
         self.num_accelerators = num_accelerators
         self.accelerator_cfg = accelerator_cfg
@@ -110,10 +115,10 @@ class AcceleratorOptimizer(Annealer):
         self.area_dict = OrderedDict()
         self.step = 0
         self.state = None
+        self.evaluated_state = None
         self.latest_energy = self.latest_latency = self.latest_edp = self.latest_area = self.latest_evaluation_result = None
-        self.metric = args.simanneal_optimization_metric
-        self.solver_type = args.solver_type
-        self.logdir = args.logdir
+        self.solver_type = SolverType.MTHGGreedyRegret
+        self.logdir = logdir
         self.accelerator_metric_logger = AcceleratorMetricLogger(self.logdir)
         self.subaccelerator_params_logger = SubacceleratorParamsLogger(self.logdir)
         self.design_space = DesignSpace(accelerator_cfg.state,
@@ -280,7 +285,6 @@ class AcceleratorOptimizer(Annealer):
         """Internal update for the status of the simulated annealing
         """
 
-        # return super().update(step, T, E, acceptance, improvement)
         def time_string(seconds):
             """Returns time in seconds as a string formatted HHHH:MM:SS."""
             s = int(round(seconds))  # round to nearest second
@@ -312,7 +316,8 @@ class AcceleratorOptimizer(Annealer):
             scheduled=self.latest_schedule,
             evaluation_result=evaluation_result
         )
-        for accl in self.state:
+        state = self.evaluated_state if self.evaluated_state else self.state
+        for accl in state:
             self.subaccelerator_params_logger.log(
                 iteration=self.step,
                 is_improved=improvement,
@@ -324,7 +329,7 @@ class AcceleratorOptimizer(Annealer):
                 weights_spad_size=accl.weights_spad_size,
                 psum_spad_size=accl.psum_spad_size,
                 evaluation_result=evaluation_result
-        )
+            )
 
     def move(self):
         """Alter the current state
@@ -359,7 +364,7 @@ class AcceleratorOptimizer(Annealer):
                     new_accelerator = self.design_space.extract(*values)
                     new_state.append(new_accelerator)
 
-        self.state = new_state
+        self.state = self.evaluated_state = new_state
         logger.info(f"=> Move #{int(self.step)} taken. New state:")
         for state in new_state:
             logger.info(f"\t{state}")

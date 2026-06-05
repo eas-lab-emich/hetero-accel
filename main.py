@@ -32,7 +32,7 @@ def main():
     """Main executing function, supporting the execution of either
        our optimization, or others for comparisons
     """
-    logging.basicConfig(level=logging.DEBUG)
+    logging.basicConfig(level=logging.INFO)
     args = env_cfg()
     args.logdir = logging.getLogger().logdir
     # save arguments as pkl, for reproducibility
@@ -344,7 +344,8 @@ def accelerator_exploration(args, workload, accuracy_lut):
                                      workload=workload,
                                      accuracy_lut=accuracy_lut,
                                      hw_constraints=SimpleNamespace(deadline=args.deadline_constraint,
-                                                                    area=args.area_constraint)
+                                                                    area=args.area_constraint),
+                                     logdir=args.logdir
                                      )
 
     if not args.skip_exploration:

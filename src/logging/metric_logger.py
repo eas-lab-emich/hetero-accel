@@ -32,3 +32,15 @@ class MetricLogger(ABC):
     def _write_row(self, row):
         self.writer.writerow(row)
         self.file.flush()
+
+    @staticmethod
+    def _format_float(to_format):
+        return f"{to_format:.2f}"
+
+    @staticmethod
+    def _format_sci_notation(to_format):
+        return f"{to_format:.3g}"
+
+    @staticmethod
+    def _format_bool(to_format):
+        return "True" if to_format else "False"

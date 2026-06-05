@@ -9,7 +9,7 @@ class AcceleratorMetricLogger(MetricLogger):
     def __init__(self, base_dir):
         super().__init__(base_dir, "accelerator_metrics.csv")
         self._write_row(
-            ["iteration",
+            ["step",
              "is_improved",
              "sim_temperature",
              "energy",
@@ -32,12 +32,12 @@ class AcceleratorMetricLogger(MetricLogger):
         self._check_closed()
         self._write_row([
             iteration,
-            is_improved,
-            sim_temperature,
-            energy,
+            self._format_bool(is_improved),
+            self._format_float(sim_temperature),
+            self._format_float(energy),
             latency,
-            edp,
-            area,
+            self._format_sci_notation(edp),
+            self._format_float(area),
             self._parse_scheduled(scheduled),
             evaluation_result.value
         ])
