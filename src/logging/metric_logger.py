@@ -35,12 +35,14 @@ class MetricLogger(ABC):
 
     @staticmethod
     def _format_float(to_format):
-        return f"{to_format:.2f}"
+        return None if to_format is None else f"{to_format:.4f}"
 
     @staticmethod
     def _format_sci_notation(to_format):
-        return f"{to_format:.3g}"
+        return None if to_format is None else f"{to_format:.6g}"
 
     @staticmethod
     def _format_bool(to_format):
+        if to_format is None:
+            return None
         return "True" if to_format else "False"

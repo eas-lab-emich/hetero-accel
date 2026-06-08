@@ -99,7 +99,7 @@ class AcceleratorOptimizer(Annealer):
         self.step = 0
         self.state = None
         self.evaluated_state = None
-        self.latest_energy = self.latest_latency = self.latest_edp = self.latest_area = self.latest_evaluation_result = None
+        self.latest_energy = self.latest_penalty = self.latest_latency = self.latest_edp = self.latest_area = self.latest_evaluation_result = None
         self.solver_type = SolverType.MTHGGreedyRegret
         self.logdir = logdir
         self.accelerator_metric_logger = AcceleratorMetricLogger(self.logdir)
@@ -136,7 +136,6 @@ class AcceleratorOptimizer(Annealer):
                     f"Energy={self.initial_energy:.3e}, "
                     f"Latency={self.initial_latency:.3e}, "
                     f"EDP={self.initial_edp:.3e}, "
-                    f"EDP(artificial)={self.initial_energy * self.initial_latency:.3e}, "
                     f"Area={self.initial_area:.3e}")
 
         # setup scheduling parameters during annealing
@@ -283,18 +282,15 @@ class AcceleratorOptimizer(Annealer):
                         f"time_elapsed={time_string(elapsed)}, time_remaining={time_string(remain)}")
 
         evaluation_result = self.latest_evaluation_result if self.latest_evaluation_result else EvaluationResult.UNKNOWN
-        edp = (
-            self.latest_energy * self.latest_latency
-            if self.latest_energy is not None and self.latest_latency is not None
-            else None
-        )
+
         self.accelerator_metric_logger.log(
             iteration=self.step,
             is_improved=improvement,
             sim_temperature=T,
             energy=self.latest_energy,
             latency=self.latest_latency,
-            edp=edp,
+            edp=self.latest_edp,
+            penalty = self.latest_penalty,
             area=self.latest_area,
             scheduled=self.latest_schedule,
             evaluation_result=evaluation_result
@@ -372,23 +368,18 @@ class AcceleratorOptimizer(Annealer):
                         f"\tEnergy={self.latest_energy:.3e}\n"
                         f"\tLatency={self.latest_latency:.3e}\n"
                         f"\tEDP={self.latest_edp:.3e}\n"
-                        f"\tEDP(artificial)={self.latest_energy * self.latest_latency:.3e}\n"
                         f"\tArea={self.latest_area:.3e}")
         elif initial:
             raise ValueError("Initial metric calculation cannot be invalid")
 
         logger.info("*--------------*")
 
-        edp = (
-            self.latest_energy * self.latest_latency
-            if self.latest_energy is not None and self.latest_latency is not None
-            else None
-        )
-
-        if edp is None:
+        if self.latest_edp is None:
             return math.inf
 
-        return edp + self.schedule_penalizer.penalize(self.latest_schedule)
+        self.latest_penalty = self.schedule_penalizer.penalize(self.latest_schedule)
+
+        return self.latest_edp + self.latest_penalty
 
     def _evaluation(self) -> EvaluationResult:
         """Evaluate the fitness of the current state
@@ -528,9 +519,7 @@ class AcceleratorOptimizer(Annealer):
                 self.latency_dict[(entry.tag, entry.bin)] for entry in entries
             ]) for bin, entries in schedule.as_dict(main_key='bin').items()
         ])
-        self.latest_edp = sum([
-            self.edp_dict[(entry.tag, entry.bin)] for entry in schedule.entries
-        ])
+        self.latest_edp = self.latest_energy * self.latest_latency
 
         # log the results of the scheduling
         schedule_str = '\n\t'.join([f'{entry.tag} -> {entry.bin}' for entry in schedule.entries])

@@ -9,10 +9,10 @@ class SchedulePenalizer:
 
     def penalize(self, schedule: Schedule):
         self.schedule_history.append(schedule)
-        return self.lambda_p3 * self.compute_p3(self.schedule_history)
+        return self.lambda_p3 * self.__compute_p3(self.schedule_history)
 
     @staticmethod
-    def compute_p3(schedule_history):
+    def __compute_p3(schedule_history):
         c = 1e17  # huge c to signal annealing there's a huge problem
         lookback_window = 4
         enforced_precision = 8

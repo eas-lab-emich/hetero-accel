@@ -15,6 +15,7 @@ class AcceleratorMetricLogger(MetricLogger):
              "energy",
              "latency",
              "edp",
+             "penalty",
              "area",
              "scheduled_dnns",
              "evaluation_result"])
@@ -28,7 +29,7 @@ class AcceleratorMetricLogger(MetricLogger):
             scheduled_dnns[entry.bin.precision] += 1
         return ";".join(f"{k}:{v}" for k, v in sorted(scheduled_dnns.items()))
 
-    def log(self, *, iteration, is_improved, sim_temperature, energy, latency, edp, area, scheduled: Schedule, evaluation_result: EvaluationResult):
+    def log(self, *, iteration, is_improved, sim_temperature, energy, latency, edp, penalty, area, scheduled: Schedule, evaluation_result: EvaluationResult):
         self._check_closed()
         self._write_row([
             iteration,
@@ -37,6 +38,7 @@ class AcceleratorMetricLogger(MetricLogger):
             self._format_float(energy),
             latency,
             self._format_sci_notation(edp),
+            self._format_sci_notation(penalty),
             self._format_float(area),
             self._parse_scheduled(scheduled),
             evaluation_result.value
