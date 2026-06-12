@@ -50,8 +50,7 @@ class SchedulePenalizer:
         return max(0, max_streak - self.window_size)
 
     def __bad(self, schedule):
-        # TODO determine badness
-        return False
+        return self.__aggregate_loss(schedule) > self.risk_threshold
 
     def __compute_p3(self, schedule_history):
         c = 1e17  # huge c to signal annealing there's a huge problem
