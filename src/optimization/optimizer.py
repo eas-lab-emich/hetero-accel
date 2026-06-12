@@ -111,7 +111,7 @@ class AcceleratorOptimizer(Annealer):
         self.init_timeloop(args.layer_type_whitelist)
         # initialize scheduler
         self.scheduler = Scheduler(args.scheduler_type)
-        self.schedule_penalizer = SchedulePenalizer()
+        self.schedule_penalizer = SchedulePenalizer(self.accuracy_lut)
 
         initial_state = self.get_initial_state()
         super().__init__(initial_state, getattr(args, 'simanneal_load_state', None))
