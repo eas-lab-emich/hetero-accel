@@ -17,8 +17,6 @@ class SchedulePenalizer:
 
     def penalize(self, schedule: Schedule):
         self.schedule_history.append(schedule)
-        risk = self.__aggregate_loss(schedule)
-        print(f"step={len(self.schedule_history) - 1}, risk={risk}")
         return (self.lambda_p1 * self.__compute_p1(self.schedule_history)
                 + self.lambda_p2 * self.__compute_p2(self.schedule_history)
                 + self.lambda_p3 * self.__compute_p3(self.schedule_history))

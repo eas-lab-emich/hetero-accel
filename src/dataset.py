@@ -13,9 +13,17 @@ logger = logging.getLogger(__name__)
 
 def load_data(dataset, dataset_path, arch, batch_size, workers,
               validation_split, train_size, valid_size, test_size, test_only,
-              verbose):
+              verbose, to_cpu):
+    loader_kwargs = {
+        'batch_size': 64,
+        'num_workers': 16,
+        'pin_memory': False if to_cpu else torch.cuda.is_available(),
+        'persistent_workers': True,
+        'prefetch_factor': 4,
+        'drop_last': False
+    }
     if "cifar" in dataset:
-        return None, None, get_test_loader(Cifar[dataset.upper()])
+        return None, None, get_test_loader(Cifar[dataset.upper()], loader_kwargs)
 
     dataset_fn = __dataset_factory(dataset, batch_size=batch_size)
     train_loader, valid_loader, test_loader = get_data_loaders(dataset_fn, dataset_path, arch, batch_size, workers,

@@ -114,6 +114,7 @@ def setup_workload(args):
                 args.effective_test_size,
                 args.evaluate_model_mode,
                 True, #self.args.verbose
+                args.cpu
             )
             datasets[dnn_args.dataset] = data_loaders
 

@@ -1,7 +1,6 @@
 import torch
 import logging
 import re
-import os.path
 from types import SimpleNamespace
 
 from crimson_magick.cifar_zoo import Cifar, Arch, load_model
@@ -9,8 +8,7 @@ from crimson_magick.cifar_zoo import Cifar, Arch, load_model
 from src import pretrained_checkpoint_paths, dataset_dirs
 from src.utils import weight_init, load_checkpoint, model_summary, save_checkpoint
 from src.meter import *
-from src.loss import *
-from src.train_test import train, validate
+from src.train_test import validate
 from src.models import create_model, DNNType
 from src.args import OptimizerType
 
@@ -22,7 +20,6 @@ class TorchNetworkWrapper:
     """DNN wrapper with training/testing functionality
     """
     def __init__(self, args, model=None):
-        device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
         self.print_frequency = None
         self.verbose = None
         for name, value in vars(args).items():
@@ -35,7 +32,7 @@ class TorchNetworkWrapper:
         self.run_summary()
 
         # loss function and accuracy meter
-        self.criterion = torch.nn.CrossEntropyLoss().to(device)
+        self.criterion = torch.nn.CrossEntropyLoss().to(self.device)
         self.accuracy_meter = ImageClassificationMeter()
 
         # optimizer
@@ -92,8 +89,7 @@ class TorchNetworkWrapper:
         if 'cifar' in self.dataset:
             arch: Arch = Arch.MOBILENETV1 if self.arch == "mobilenet" else Arch[self.arch.upper()]
             cifar: Cifar = Cifar[self.dataset.upper()]
-            device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
-            self.model = load_model(arch, cifar, device)
+            self.model = load_model(arch, cifar, self.device)
             for name, module in self.model.named_modules():
                 module.full_name = name
             return
@@ -130,8 +126,7 @@ class TorchNetworkWrapper:
         else:
             dummy_input = next(iter(data_loader))[0] if data_loader else None
             if dummy_input is not None:
-                device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
-                dummy_input = dummy_input.to(device)
+                dummy_input = dummy_input.to(self.device)
             self.summary = model_summary(self.model, dummy_input)
             self.num_layers = len(self.summary)
 
@@ -148,29 +143,6 @@ class TorchNetworkWrapper:
             tb_logger.add_histogram(name, param, 0)
             if param.grad is not None:
                 tb_logger.add_histogram(name + '.grad', param.grad, 0)
-
-    def train(self, epochs, train_loader, steps_per_epoch=None, profiler=None):
-        """Run some training epochs on the model
-        """
-        self.accuracy_meter.reset()
-        train_metrics = []
-        if steps_per_epoch is None:
-            steps_per_epoch = len(train_loader)
-
-        for epoch in range(epochs):
-            accuracy_metrics = train(train_loader=train_loader,
-                                     model=self.model,
-                                     criterion=self.criterion,
-                                     optimizer=self.optimizer,
-                                     accuracy_meter=self.accuracy_meter,
-                                     profiler=profiler,
-                                     compression_scheduler=None,
-                                     epoch=epoch,
-                                     steps_per_epoch= steps_per_epoch,
-                                     verbose=self.verbose,
-                                     print_frequency=self.print_frequency)
-            train_metrics.extend(accuracy_metrics)
-        return train_metrics
 
     @property
     def accuracy_metrics(self):
@@ -202,7 +174,8 @@ class TorchNetworkWrapper:
                                     epoch=0,
                                     verbose=self.verbose,
                                     print_frequency=self.print_frequency,
-                                    use_quant=use_quant)
+                                    use_quant=use_quant,
+                                    device=self.device)
         return accuracy_metrics
 
     def save_model(self, name=None, episode=None, is_best=False, verbose=True):

@@ -11,6 +11,7 @@ from time import time
 from shutil import copy
 from simanneal import Annealer
 
+from src import workload
 from src.evaluation_result import EvaluationResult
 from src.logging.subaccelerator_params_logger import SubacceleratorParamsLogger
 from src.logging.accelerator_metric_logger import AcceleratorMetricLogger
@@ -158,6 +159,7 @@ class AcceleratorOptimizer(Annealer):
     def close(self):
         self.accelerator_metric_logger.close()
         self.subaccelerator_params_logger.close()
+        del self.workload
 
     def init_timeloop(self, layer_type_whitelist, timeloop_workdir=None):
         """Initialize timeloop wrapper object
