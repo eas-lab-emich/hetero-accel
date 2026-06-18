@@ -6,14 +6,14 @@ from src.optimization.scheduling import Schedule
 class SchedulePenalizer:
 
     def __init__(self, accuracy_lut):
-        self.lambda_p1 = 1.2
-        self.lambda_p2 = 1.04
-        self.lambda_p3 = 1.1
-        self.window_size = 4
+        self.lambda_p1 = 0.02 * 1e17
+        self.lambda_p2 = 0.02 * 1e17
+        self.lambda_p3 = 0.3 * 1e17
+        self.window_size = 3
         self.accuracy_lut = accuracy_lut
         self.schedule_history = []
         self.baseline_precision = 8
-        self.risk_threshold = 12  # 12% accumulated accuracy loss vs baseline
+        self.risk_threshold = 8
 
     def penalize(self, schedule: Schedule):
         self.schedule_history.append(schedule)
@@ -51,7 +51,7 @@ class SchedulePenalizer:
         return self.__aggregate_loss(schedule) > self.risk_threshold
 
     def __compute_p3(self, schedule_history):
-        c = 1e17  # huge c to signal annealing there's a huge problem
+        c = 1
         enforced_precision = 8
         window = self.window_size
         if len(schedule_history) < window:
@@ -66,6 +66,8 @@ class SchedulePenalizer:
         return c
 
     def __aggregate_loss(self, schedule):
+        if not schedule or not schedule.assigned:
+            return 0
         losses = []
         for (network, assignment) in schedule.assigned.items():
             assignment_precision = assignment.precision
@@ -73,8 +75,6 @@ class SchedulePenalizer:
             baseline_accuracy = self.__network_accuracy(network, self.baseline_precision)
             loss = baseline_accuracy - assignment_accuracy
             losses.append(loss)
-        if not losses: # if somehow we get here and have no assignments
-            return 0
         return np.mean(losses)
 
     def __network_accuracy(self, network, precision):

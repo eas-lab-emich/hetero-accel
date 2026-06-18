@@ -377,7 +377,8 @@ class AcceleratorOptimizer(Annealer):
         logger.info("*--------------*")
 
         if self.latest_edp is None:
-            return math.inf
+            self.latest_penalty = math.inf
+            return self.latest_penalty
 
         self.latest_penalty = self.schedule_penalizer.penalize(self.latest_schedule)
 
@@ -490,7 +491,7 @@ class AcceleratorOptimizer(Annealer):
         # check the area constraint
         self.latest_area = sum([self.area_dict[accelerator] for accelerator in self.state])
         if violated_area_constraint(self.latest_area):
-            self.latest_schedule = self.latest_energy = self.latest_latency = None
+            self.latest_schedule = self.latest_energy = self.latest_latency = self.latest_edp = None
             logger.info("Violated area constraint")
             return EvaluationResult.AREA_CONSTRAINT
 

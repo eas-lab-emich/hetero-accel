@@ -57,7 +57,7 @@ compression_args:
 accel_args:
         accelerator_arch_type: eyeriss
         deadline_constraint: null
-        area_constraint: 0.1
+        area_constraint: 0.3
 
 simanneal_args:
         simannel_state_delta: 0.4
