@@ -1,7 +1,9 @@
+import gc
 from math import ceil
 from random import uniform
 
 import crimson_magick.cifar_zoo
+import torch
 import yaml
 import os
 import shutil
@@ -1039,4 +1041,10 @@ if __name__ == "__main__":
     p = tw.run(prob_name)
     results = tw.get_results(prob_name)
     print(results._asdict())
+    del net_wrapper.model
+    del net_wrapper
+    gc.collect()
+    torch.cuda.empty_cache()
+    exit(0)
+
 

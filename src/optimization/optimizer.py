@@ -16,7 +16,7 @@ from src.evaluation_result import EvaluationResult
 from src.logging.subaccelerator_params_logger import SubacceleratorParamsLogger
 from src.logging.accelerator_metric_logger import AcceleratorMetricLogger
 
-from src.optimization.evaluation import SchedulePenalizer
+from src.optimization.evaluation import SchedulePenalizer, Penalty
 from src.optimization.scheduling import SolverType, Scheduler
 from src.timeloop import TimeloopWrapper, timeloop_execution, timeloop_execution_mock
 from src.utils import get_contents_table
@@ -88,6 +88,7 @@ class AcceleratorOptimizer(Annealer):
                  hw_constraints,
                  logdir
                  ):
+        self.latest_penalty_details = None
         self.num_accelerators = num_accelerators
         self.accelerator_cfg = accelerator_cfg
         self.workload = workload
@@ -295,6 +296,7 @@ class AcceleratorOptimizer(Annealer):
             penalty = self.latest_penalty,
             area=self.latest_area,
             scheduled=self.latest_schedule,
+            penalty_details=self.latest_penalty_details,
             evaluation_result=evaluation_result
         )
         state = self.evaluated_state if self.evaluated_state else self.state
@@ -378,10 +380,11 @@ class AcceleratorOptimizer(Annealer):
 
         if self.latest_edp is None:
             self.latest_penalty = math.inf
+            self.latest_penalty_details = None
             return self.latest_penalty
 
-        self.latest_penalty = self.schedule_penalizer.penalize(self.latest_schedule)
-
+        self.latest_penalty_details = self.schedule_penalizer.penalize(self.latest_schedule)
+        self.latest_penalty = self.latest_penalty_details.total_penalty
         return self.latest_edp + self.latest_penalty
 
     def _evaluation(self) -> EvaluationResult:
@@ -451,7 +454,7 @@ class AcceleratorOptimizer(Annealer):
                 latency_dict[(arch, accelerator)] = 0
                 edp_dict[(arch, accelerator)] = 0
                 # iterate over each timeloop problem (layer) of the DNN
-                with ThreadPoolExecutor(max_workers=32) as executor:
+                with ThreadPoolExecutor(max_workers=1) as executor:
                     tasks = {
                         executor.submit(timeloop_execution, self.timeloop_wrapper, problem_name): problem_name
                         # executor.submit(timeloop_execution_mock, self.timeloop_wrapper, problem_name): problem_name

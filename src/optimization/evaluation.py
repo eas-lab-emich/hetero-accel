@@ -1,6 +1,12 @@
+from collections import namedtuple
+
 import numpy as np
 
 from src.optimization.scheduling import Schedule
+
+Penalty = namedtuple('Penalty',
+                     ['total_penalty', 'aggregate_accuracy_loss',
+                      'p1', 'p2', 'p3', 'lambda_1', 'lambda_2', 'lambda_3', 'window', 'risk_threshold'])
 
 
 class SchedulePenalizer:
@@ -15,11 +21,16 @@ class SchedulePenalizer:
         self.baseline_precision = 8
         self.risk_threshold = 8
 
-    def penalize(self, schedule: Schedule):
+    def penalize(self, schedule: Schedule) -> Penalty:
         self.schedule_history.append(schedule)
-        return (self.lambda_p1 * self.__compute_p1(self.schedule_history)
-                + self.lambda_p2 * self.__compute_p2(self.schedule_history)
-                + self.lambda_p3 * self.__compute_p3(self.schedule_history))
+        p1 = self.__compute_p1(self.schedule_history)
+        p2 = self.__compute_p2(self.schedule_history)
+        p3 = self.__compute_p3(self.schedule_history)
+        total_penalty = (self.lambda_p1 * p1 + self.lambda_p2 * p2 + self.lambda_p3 * p3)
+        return Penalty(total_penalty, self.__aggregate_loss(schedule),
+                       p1, p2, p3,
+                       self.lambda_p1, self.lambda_p2, self.lambda_p3,
+                       self.window_size, self.risk_threshold)
 
     def __compute_p1(self, schedule_history):
         schedules = schedule_history[:-self.window_size + 1]
