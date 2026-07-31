@@ -11,14 +11,13 @@ from time import time
 from shutil import copy
 from simanneal import Annealer
 
-from src import workload
 from src.evaluation_result import EvaluationResult
 from src.logging.subaccelerator_params_logger import SubacceleratorParamsLogger
 from src.logging.accelerator_metric_logger import AcceleratorMetricLogger
 
-from src.optimization.evaluation import SchedulePenalizer, Penalty
+from src.optimization.evaluation import SchedulePenalizer
 from src.optimization.scheduling import SolverType, Scheduler
-from src.timeloop import TimeloopWrapper, timeloop_execution, timeloop_execution_mock
+from src.worker.timeloop import TimeloopWrapper, timeloop_execution
 from src.utils import get_contents_table
 
 __all__ = ['DesignSpace', 'AcceleratorOptimizer']
@@ -110,7 +109,7 @@ class AcceleratorOptimizer(Annealer):
                                         **accelerator_cfg.design_space)
 
         # initialize timeloop
-        self.init_timeloop(args.layer_type_whitelist)
+        self.init_timeloop()
         # initialize scheduler
         self.scheduler = Scheduler(args.scheduler_type)
         self.schedule_penalizer = SchedulePenalizer(self.accuracy_lut)
@@ -162,7 +161,7 @@ class AcceleratorOptimizer(Annealer):
         self.subaccelerator_params_logger.close()
         del self.workload
 
-    def init_timeloop(self, layer_type_whitelist, timeloop_workdir=None):
+    def init_timeloop(self, timeloop_workdir=None):
         """Initialize timeloop wrapper object
         """
         if timeloop_workdir is None:
@@ -172,15 +171,13 @@ class AcceleratorOptimizer(Annealer):
         # prepare each layer for timeloop simulations
         self.timeloop_problems_per_dnn = {}
         self.timeloop_problem_to_layer_name = {}
-        for arch, net_wrapper in self.workload.dnns.items():
+        for arch, summaries in self.workload.items():
             self.timeloop_problems_per_dnn[arch] = []
             self.timeloop_problem_to_layer_name[arch] = {}
-
-            layers_to_consider = [name for name, module in net_wrapper.model.named_modules()
-                                  if isinstance(module, layer_type_whitelist)]
+            layers_to_consider = ['conv2d', 'linear']
             layer_idx = 0
-            for layer_name, layer_info in self.workload.get_summary(arch).items():
-                if layer_name not in layers_to_consider:
+            for layer_name, layer_info in summaries.items():
+                if layer_info.layer_type.lower() not in layers_to_consider:
                     continue
 
                 problem_name = f'{arch}__layer{layer_idx}_{layer_name}'
@@ -425,7 +422,7 @@ class AcceleratorOptimizer(Annealer):
         for accelerator in self.state:
             logger.info(f"\tEvaluating on accelerator: {accelerator._asdict()}")
             # iterate over each DNN
-            for arch in self.workload.dnns.keys():
+            for arch in self.workload.keys():
                 logger.info(f"\t\tEvaluating on DNN: {arch}")
 
                 # check if this evaluation was executed before
@@ -454,7 +451,7 @@ class AcceleratorOptimizer(Annealer):
                 latency_dict[(arch, accelerator)] = 0
                 edp_dict[(arch, accelerator)] = 0
                 # iterate over each timeloop problem (layer) of the DNN
-                with ThreadPoolExecutor(max_workers=1) as executor:
+                with ThreadPoolExecutor(max_workers=32) as executor:
                     tasks = {
                         executor.submit(timeloop_execution, self.timeloop_wrapper, problem_name): problem_name
                         # executor.submit(timeloop_execution_mock, self.timeloop_wrapper, problem_name): problem_name
@@ -501,7 +498,7 @@ class AcceleratorOptimizer(Annealer):
         # perform the scheduling and get a concrete DNN-to-accelerator mapping
         start = time()
         # TODO: Consider the metrics used for weight_dict and cost_dict
-        schedule = self.scheduler.run(items=list(self.workload.dnns.keys()),
+        schedule = self.scheduler.run(items=list(self.workload.keys()),
                                       bins=self.state,
                                       cost_dict=self.energy_dict,
                                       weight_dict=self.latency_dict,

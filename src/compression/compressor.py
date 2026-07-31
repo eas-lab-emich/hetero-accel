@@ -10,7 +10,7 @@ from src.net_wrapper import TorchNetworkWrapper
 from src.utils import compute_model_statistics
 from src.accelerator_cfg import AcceleratorProfile
 from src.compression.pruning import Pruner
-from src.timeloop import TimeloopWrapper
+from src.worker.timeloop import TimeloopWrapper
 
 
 logger = logging.getLogger(__name__)

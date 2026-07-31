@@ -580,7 +580,7 @@ def get_dummy_input(device=None, input_shape=None):
     return create_recurse(input_shape)
 
 
-def model_summary(model, dummy_input=None):
+def model_summary(model, dummy_input=None)  -> OrderedDict[str, SimpleNamespace]:
     """Record statistics for input/output dimensions of each layer of a given model
     """
     def register_hook(module):
