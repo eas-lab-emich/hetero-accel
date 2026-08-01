@@ -10,8 +10,6 @@ import numpy as np
 import pandas as pd
 import torch
 import random
-import subprocess as sp
-from numbers import Number
 from enum import Enum
 from datetime import datetime
 from errno import ENOENT
@@ -19,10 +17,8 @@ from numbers import Number
 from copy import deepcopy
 from collections import OrderedDict
 from types import SimpleNamespace
-from glob import glob
 from tabulate import tabulate
-from time import time
-from src import project_dir, eyeriss_timeloop_dir
+from src import project_dir
 from src.args import app_args, workload_args, compression_args, accel_args, \
                      simanneal_args, check_args, baseline_args, sota_args, partition_args
 from src.args import ModelSummaryType
@@ -32,7 +28,6 @@ __all__ = [
     'env_cfg', 'logging_cfg', 'cfg_from_yaml', 'set_deterministic',
     'load_checkpoint', 'save_checkpoint', 'weight_init', 'transform_model',
     'log_training_progress', 'perfect_divisors', 'get_contents_table',
-    'force_quotes_on_str',
     'get_sparsity', 'compute_model_statistics', 'get_dummy_input', 'model_summary',
     'handle_model_subapps',
     'iou', 'iou_wh', 'nms'
@@ -452,34 +447,6 @@ def get_contents_table(content_dict):
     return tabulate(contents, headers=["Key", "Type", "Value"], tablefmt="psql")
 
 
-def force_quotes_on_str(nested_dict, filter_fn=None):
-    """Add quotes to each str located within a nested dict
-    """
-    class quoted(str):
-        pass
-
-    def quoted_presenter(dumper, data):
-        return dumper.represent_scalar('tag:yaml.org,2002:str', data, style='"')
-    yaml.add_representer(quoted, quoted_presenter)
-
-    if filter_fn is None:
-        filter_fn = lambda entry: isinstance(entry, str)
-
-    def recursion_f(this_dict):
-        for key, value in this_dict.items():
-            if isinstance(value, dict):
-                recursion_f(this_dict[key])
-            elif filter_fn(value):
-                this_dict[key] = quoted(value)
-            elif isinstance(value, (list, tuple)):
-                for v in value:
-                    assert isinstance(v, dict)
-                    recursion_f(v)
-
-    # execute the recursion function
-    recursion_f(nested_dict)
-
-
 def get_sparsity(param):
     """Calculate the sparsity across diverse dimentions
     """
@@ -770,55 +737,6 @@ def handle_model_subapps(net_wrapper, data_loaders, args):
                 logger.info(f"\tSparsity={stats['sparsity']:.3f} - Size={stats['size']:.3e} - Area={area:.3e} - "
                             f"Latency={latency:.3e} - Power={power:.3e} - Energy={energy:.3e}")
 
-    elif args.test_timeloop_accelergy_mode:
-        # test accelergy
-        accelergy_dir = os.path.join(os.path.dirname(eyeriss_timeloop_dir), 'accelergy')
-        inputs_dir = os.path.join(accelergy_dir, '04_eyeriss_like', 'input')
-        positional_args = f'{inputs_dir}/*.yaml {inputs_dir}/components/*.yaml'
-        # correct accelergy version on files in the exercise
-        for arch_file in glob(f'{inputs_dir}/*.yaml') + glob(f'{inputs_dir}/components/*.yaml'):
-            command = rf"sed -i 's_\(version:\).*_\1 0.3_' {arch_file}"
-            logger.debug(f'Executing sed command:\n{command}')
-            p = sp.run(command, shell=True, check=True, capture_output=True, text=True)
-            logger.debug(f'Command status: {p.returncode}')
-
-        command = f'accelergy {positional_args} '\
-                  f'--outdir {net_wrapper.logdir} ' \
-                  f'--output_files energy_estimation ERT_summary ART_summary flattened_arch '\
-                  f'--oprefix {net_wrapper.model.arch}__ '\
-                  f'--verbose 1 --precision 3'
-        logger.debug(f'Accelergy command: {command}')
-        start = time()
-        p = sp.run(command, shell=True, check=True, capture_output=True, text=True)
-        logger.debug(f'Stdout: {p.stdout}')
-        logger.debug(f'Stderr: {p.stderr}')
-        logger.info(f'Executed accelergy command (exitcode: {p.returncode}) in {time() - start:.3e}s')
-
-        # test timeloop model
-        inputs_dir = os.path.join(eyeriss_timeloop_dir, '04-model-conv1d+oc-3levelspatial')
-        command = f'timeloop-model '\
-                  f'{inputs_dir}/arch/*.yaml '\
-                  f'{inputs_dir}/map/conv1d+oc+ic-3levelspatial-cp-ws.map.yaml '\
-                  f'{inputs_dir}/prob/*.yaml'
-        start = time()
-        p = sp.run(command, shell=True, check=True, capture_output=True, text=True)
-        logger.debug(f'Stdout: {p.stdout}')
-        logger.debug(f'Stderr: {p.stderr}')
-        logger.info(f'Executed timeloop-model command (exitcode: {p.returncode}) in {time() - start:.3e}s')
-
-        # test timeloop mapper
-        inputs_dir = os.path.join(os.path.dirname(eyeriss_timeloop_dir), 'timeloop+accelergy')
-        command = f'timeloop-mapper '\
-                  f'{inputs_dir}/arch/eyeriss_like-int16.yaml '\
-                  f'{inputs_dir}/arch/components/*.yaml '\
-                  f'{inputs_dir}/prob/prob.yaml '\
-                  f'{inputs_dir}/mapper/mapper.yaml '\
-                  f'{inputs_dir}/constraints/*.yaml '
-        start = time()
-        p = sp.run(command, shell=True, check=True, capture_output=True, text=True)
-        logger.debug(f'Stdout: {p.stdout}')
-        logger.debug(f'Stderr: {p.stderr}')
-        logger.info(f'Executed timeloop-mapper command (exitcode: {p.returncode}) in {time() - start:.3e}s')
 
     return do_exit
 

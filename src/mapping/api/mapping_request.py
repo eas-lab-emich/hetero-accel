@@ -2,8 +2,8 @@ from uuid import UUID
 
 from pydantic import BaseModel
 
-from src.worker.api.accelerator import AcceleratorConfiguration
-from src.worker.api.problem import ConvolutionProblem
+from src.mapping.api.accelerator import AcceleratorConfiguration
+from src.mapping.api.problem import ConvolutionProblem
 
 
 class MappingRequest(BaseModel):

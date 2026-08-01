@@ -1,58 +1,76 @@
 import gc
-import uuid
-from math import ceil
-from random import uniform
-from uuid import UUID
-
-import crimson_magick.cifar_zoo
-import torch
-import yaml
-import os
-import shutil
 import logging
-import subprocess
+import os
 import re
-from time import time
+import shutil
+import subprocess
+import yaml
+
+from collections import namedtuple
 from copy import deepcopy
 from glob import glob
-from collections import OrderedDict, namedtuple
-
-from crimson_magick.cifar_zoo import Cifar
-
-from src.net_wrapper import TorchNetworkWrapper
+from time import time
 from types import SimpleNamespace
-from src import eyeriss_timeloop_dir, simba_timeloop_dir, project_dir
-from src.accelerator_cfg import AcceleratorType
+from uuid import UUID
+
+from src import project_dir
 from src.args import OptimizerType
-from src.utils import force_quotes_on_str
+from src.mapping.api.accelerator import AcceleratorConfiguration
+from src.mapping.api.mapping_request import MappingRequest
+from src.mapping.api.problem import ConvolutionProblem
 
-__all__ = ['TimeloopStats', 'TimeloopWrapper', 'TimeloopTemplate', 'TimeloopProblem', 'TimeloopArch', 'TimeloopMapper', 'timeloop_execution', 'timeloop_execution_mock']
-
-from src.worker.api.accelerator import AcceleratorConfiguration
-
-from src.worker.api.mapping_request import MappingRequest
-from src.worker.api.problem import ConvolutionProblem
+__all__ = ['MappingStats', 'TimeloopWrapper', 'TimeloopTemplate', 'TimeloopProblem', 'TimeloopArch', 'TimeloopMapper']
 
 logger = logging.getLogger(__name__)
 
 TIMELOOP_ACCELERGY_VERSION = 0.4
 
-TimeloopStats = namedtuple('TimeloopStats', ['gflops', 'utilization', 'cycles',
-                                             'energy', 'edp', 'area'])
+MappingStats = namedtuple('MappingStats', ['gflops', 'utilization', 'cycles',
+                                           'energy', 'edp', 'area'])
+
+
+def force_quotes_on_str(nested_dict, filter_fn=None):
+    """Add quotes to each str located within a nested dict
+    """
+
+    class quoted(str):
+        pass
+
+    def quoted_presenter(dumper, data):
+        return dumper.represent_scalar('tag:yaml.org,2002:str', data, style='"')
+
+    yaml.add_representer(quoted, quoted_presenter)
+
+    if filter_fn is None:
+        filter_fn = lambda entry: isinstance(entry, str)
+
+    def recursion_f(this_dict):
+        for key, value in this_dict.items():
+            if isinstance(value, dict):
+                recursion_f(this_dict[key])
+            elif filter_fn(value):
+                this_dict[key] = quoted(value)
+            elif isinstance(value, (list, tuple)):
+                for v in value:
+                    assert isinstance(v, dict)
+                    recursion_f(v)
+
+    # execute the recursion function
+    recursion_f(nested_dict)
 
 
 class TimeloopWrapper:
     """Wrapper for Timeloop+Accelergy tool
     """
 
-    def __init__(self, accelerator_type, workdir):
-        self.template = TimeloopTemplate(accelerator_type)
+    def __init__(self, workdir, *, cleanup=True):
+        self.template = TimeloopTemplate()
         self.workdir = workdir
+        self.cleanup = cleanup
         os.makedirs(self.workdir, exist_ok=True)
         self.mapper = TimeloopMapper(mapper_file=os.path.join(self.workdir, 'mapper.yaml'))
 
-
-    def map(self, request: MappingRequest):
+    def map(self, request: MappingRequest) -> MappingStats:
         request_dir = os.path.join(self.workdir, str(request.id))
         os.makedirs(request_dir, exist_ok=True)
 
@@ -74,7 +92,6 @@ class TimeloopWrapper:
         for constraint_file in self.template.constraint_files:
             shutil.copy2(constraint_file, constraint_dir)
 
-
         logfile = os.path.join(request_dir, 'timeloop-mapper.log')
 
         command = f'timeloop-mapper ' \
@@ -89,9 +106,13 @@ class TimeloopWrapper:
         completed_process = subprocess.run(["bash", "-lc", command], check=True, capture_output=True)
         logger.debug(f"Executed timeloop-mapper command in {time() - start:.3e}s "
                      f"with exitcode: {completed_process.returncode}")
-        return self.get_results(output_dir)
+        results = self._get_results(output_dir)
+        if self.cleanup:
+            shutil.rmtree(request_dir)
+        return results
 
-    def get_results(self, output_dir) -> TimeloopStats:
+    @staticmethod
+    def _get_results(output_dir) -> MappingStats:
         """Get the results of a succesfull run from Timeloop. Note, timeloop provides
            a script that does a more analytical parsing: 
            https://github.com/NVlabs/timeloop/blob/master/scripts/parse_timeloop_output.py#L55
@@ -135,46 +156,29 @@ class TimeloopWrapper:
         # if area is 0.0 from the stats file, we override with ART values
         area = _get_area_from_ART() if float(area) <= 0.0 else float(area)
 
-        return TimeloopStats(gflops, utilization, cycles, energy, edp, area)
-
-    def cleanup(self, problem_name, override_outdir=None):
-        """Remove files from the output directory after a run
-        """
-        if override_outdir is not None:
-            outdir = override_outdir
-        elif len(glob(f'{self.output_dir}/{problem_name}/*')) > 0:
-            outdir = f"{self.output_dir}/{problem_name}"
-        else:
-            return
-        for file in glob(os.path.join(outdir, 'timeloop-mapper*')):
-            os.remove(file)
+        return MappingStats(gflops, utilization, cycles, energy, edp, area)
 
     def adjust_architecture(self, accelerator: AcceleratorConfiguration):
         """Adjust the architectural parameters of the accelerator
         """
         self.arch.adjust(accelerator)
-        self.arch.to_yaml()
+        self.arch._to_yaml()
 
 
-
+# TODO break into two functions
 class TimeloopTemplate:
     """Configuration environment for Timeloop files
     """
 
-    def __init__(self, accelerator_type):
-        if accelerator_type == AcceleratorType.Eyeriss:
-            self.arch_components = glob(os.path.join(eyeriss_timeloop_dir, 'arch', 'components', '*.yaml'))
-            self.constraint_files = glob(os.path.join(eyeriss_timeloop_dir, 'constraints', '*.yaml'))
-
-        elif accelerator_type == AcceleratorType.Simba:
-            self.arch_components = [os.path.join(simba_timeloop_dir, 'components.yaml')]
-            self.constraint_files = [os.path.join(simba_timeloop_dir, 'architecture_constraints.yaml'),
-                                     os.path.join(simba_timeloop_dir, 'mapspace_constraints.yaml')]
-
-        else:
-            raise NotImplementedError(f"Accelerator type {accelerator_type} is not supported")
+    def __init__(self):
+        eyeriss_timeloop_dir = os.path.join(project_dir, 'timeloop-accelergy-exercises',
+                                            'workspace', 'exercises', '2020.ispass', 'timeloop',
+                                            '06-mapper-convlayer-eyeriss')
+        self.arch_components = glob(os.path.join(eyeriss_timeloop_dir, 'arch', 'components', '*.yaml'))
+        self.constraint_files = glob(os.path.join(eyeriss_timeloop_dir, 'constraints', '*.yaml'))
 
 
+# TODO convert to function
 class TimeloopProblem:
     """Utility class to handle and create a Timeloop-related workload
     """
@@ -183,20 +187,10 @@ class TimeloopProblem:
         self.problem_filepath = problem_filepath
         self.config = None
 
-        self.config_conv_layer(id, problem)
-        self.to_yaml()
+        self._config_conv_layer(id, problem)
+        self._to_yaml()
 
-    def adjust_dimension(self, dimension, value=None, adjust_by=None):
-        """Change/Adjust the value of a given workload dimension
-        """
-        if value is not None:
-            self.config['instance'][dimension] = int(max(1, value))
-        elif adjust_by is not None:
-            self.config['instance'][dimension] = int(max(1, self.config['instance'][dimension] * adjust_by))
-        else:
-            raise ValueError("To change a workload dimension, specify either the absolute value or relative change")
-
-    def to_yaml(self, filepath=None):
+    def _to_yaml(self, filepath=None):
         """Create a yaml description of the workload
         """
         if filepath is None:
@@ -205,7 +199,7 @@ class TimeloopProblem:
         with open(filepath, 'w') as f:
             f.write(yaml.dump({'problem': self.config}))
 
-    def config_conv_layer(self, id: UUID, problem):
+    def _config_conv_layer(self, id: UUID, problem):
         """Create the configuration for a Convolutional-type layer
         """
         output_width = int(
@@ -278,7 +272,6 @@ class TimeloopProblem:
         self.config = config
 
 
-
 class TimeloopArch:
     """Utility class to handle the architectural parameters of the accelerator
        when using timeloop
@@ -298,7 +291,6 @@ class TimeloopArch:
         self.get_config = self._get_config_eyeriss
         self.adjust = self._adjust_eyeriss
         self.adjust_precision = self._adjust_precision_eyeriss
-
 
         # initialize dict with parameters
         self.get_default_params()
@@ -628,17 +620,18 @@ class TimeloopArch:
         self.config = config
 
 
+# TODO turn into function
 class TimeloopMapper:
     """Utility wrapper class fot the mapping optimizer
     """
 
     def __init__(self, mapper_file):
         self.mapper_filepath = mapper_file
-        self.get_params()
-        self.get_config()
-        self.to_yaml()
+        self._get_params()
+        self._get_config()
+        self._to_yaml()
 
-    def get_params(self):
+    def _get_params(self):
         """Collect the default configuration parameters of the mapper 
         """
         self.params = SimpleNamespace()
@@ -650,7 +643,7 @@ class TimeloopMapper:
         self.params.algorithm = 'random-pruned'
         self.params.max_permutations_per_if_visit = 16
 
-    def get_config(self):
+    def _get_config(self):
         """Write the configuration parameters to a yaml-like dict
         """
         config = {
@@ -664,7 +657,7 @@ class TimeloopMapper:
         }
         self.config = config
 
-    def to_yaml(self, filepath=None):
+    def _to_yaml(self, filepath=None):
         """Write the configuration of the mapper to a yaml file
         """
         if filepath is None:
@@ -674,55 +667,30 @@ class TimeloopMapper:
         with open(filepath, 'w') as f:
             f.write(yaml.dump({'mapper': self.config}))
 
-    def adjust_param(self, param_name, value):
-        """Generic function to override a parameter value
-        """
-        assert hasattr(self.params, param_name), f'{param_name} is not a valid parameter'
-        setattr(self.params, param_name, value)
-        # update the configuration with new parameters
-        self.get_config()
 
-def timeloop_execution(timeloop_wrapper: TimeloopWrapper, problem_name: str) -> TimeloopStats:
-    logger.debug(f"\t\t\tEvaluating layer/problem: {problem_name}")
-    timeloop_wrapper.run(problem_name)
-    results = timeloop_wrapper.get_results(problem_name)
-    logger.debug(f"\t\t\tLayer-wise results: "
-                 f"energy={results.energy:.3e}, latency={results.cycles:.3e}, edp={results.edp:.3e}")
-    timeloop_wrapper.cleanup(problem_name)
-    return results
+# TODO incorporate into a mock of timeloop wrapper
+# def timeloop_execution_mock(timeloop_wrapper: TimeloopWrapper, problem_name: str) -> TimeloopStats:
+#     energy_base=6.608e+04
+#     latency_base=3.303e+07
+#     area_base = 12.715
+#     energy = uniform(energy_base - 1e4, energy_base + 1e4)
+#     latency = ceil(uniform(latency_base - 1e7, latency_base + 1e7))
+#     area = uniform(area_base - 1, area_base + 1)
+#     return TimeloopStats(gflops=None, utilization=None, energy=energy, cycles=latency,
+#                             edp=energy * latency, area=area)
 
-def timeloop_execution_mock(timeloop_wrapper: TimeloopWrapper, problem_name: str) -> TimeloopStats:
-    energy_base=6.608e+04
-    latency_base=3.303e+07
-    area_base = 12.715
-    energy = uniform(energy_base - 1e4, energy_base + 1e4)
-    latency = ceil(uniform(latency_base - 1e7, latency_base + 1e7))
-    area = uniform(area_base - 1, area_base + 1)
-    return TimeloopStats(gflops=None, utilization=None, energy=energy, cycles=latency,
-                            edp=energy * latency, area=area)
 
-if __name__ == "__main__":
+def timeloop_test():
     logging.basicConfig(level=logging.DEBUG)
 
-    accel_type = AcceleratorType.Eyeriss
-    DO_EXPLORATION = False
-    # prob_name = 'resnet18__layer0_conv1'
-    # prob_name = 'vgg13__layer0_features.0'
-
-    tw = TimeloopWrapper(accel_type, project_dir + '/test_tl_2')
-
-    # prob_fp = os.path.join(tw.workload_dir, prob_name + '.yaml')
-    # have the file already in the test_tl/yamls/ directory
-    # shutil.copyfile(project_dir + f'/test_problems/{prob_name}.yaml', prob_fp)
-
-    # tw.workloads[prob_name] = SimpleNamespace()
-    # tw.workloads[prob_name].problem_filepath = prob_fp
+    import crimson_magick.cifar_zoo
 
     model_config = SimpleNamespace(arch='resnet50', dataset='cifar100', batch_size=1, gpus=0, cpu=False,
                                    load_serialized=False, pretrained=True, resumed_checkpoint_path=None, optimizer_type=
                                    OptimizerType.Adam, print_frequency=100, verbose=True)
-    prob_name = "conv_test"
+    from src.net_wrapper import TorchNetworkWrapper
     net_wrapper = TorchNetworkWrapper(model_config)
+    from crimson_magick.cifar_zoo import Cifar
     dataset = crimson_magick.cifar_zoo.get_test_loader(Cifar.CIFAR100)
     net_wrapper.run_summary(dataset)
     to_serialize = net_wrapper.summary['model.layer4.1.conv1']
@@ -739,21 +707,12 @@ if __name__ == "__main__":
         kernel_width=to_serialize.dimensions['S'],
         kernel_height=to_serialize.dimensions['R'],
     )
-    print("hi")
-    # tw.init_problem(prob_name, "Conv2d", to_serialize.dimensions)
-
 
     from src.accelerator_cfg import AcceleratorProfile
-
+    from src.accelerator_cfg import AcceleratorType
+    accel_type = AcceleratorType.Eyeriss
     accel_cfg = AcceleratorProfile(accel_type)
 
-    # accel = accel_cfg.state(pe_array_x=accel_cfg.pe_array_x,
-    #                         pe_array_y=accel_cfg.pe_array_y,
-    #                         precision=4,
-    #                         sram_size=accel_cfg.sram_size,
-    #                         ifmap_spad_size=accel_cfg.ifmap_spad_size,
-    #                         weights_spad_size=accel_cfg.weights_spad_size,
-    #                         psum_spad_size=accel_cfg.psum_spad_size)
     accelerator_config = AcceleratorConfiguration(
         pe_array_x=accel_cfg.pe_array_x,
         pe_array_y=accel_cfg.pe_array_y,
@@ -764,24 +723,24 @@ if __name__ == "__main__":
         psum_spad_size=accel_cfg.psum_spad_size
     )
 
+    import uuid
     request = MappingRequest(
-        id = uuid.uuid4(),
+        id=uuid.uuid4(),
         accelerator_config=accelerator_config,
         problem=problem
     )
 
-
     logger.info(f'Accelerator:{accelerator_config}')
-    # tw.adjust_architecture(accel, adjust_components=True)
-    # tw.cleanup(prob_name)
-    # p = tw.run(prob_name)
-    # results = tw.get_results(prob_name)
+    tw = TimeloopWrapper(project_dir + '/test_tl_2', cleanup=False)
     results = tw.map(request)
     print(results._asdict())
     del net_wrapper.model
     del net_wrapper
     gc.collect()
+    import torch
     torch.cuda.empty_cache()
     exit(0)
 
 
+if __name__ == "__main__":
+    timeloop_test()

@@ -4,10 +4,6 @@ import os
 
 project_dir = os.path.dirname(os.path.dirname(__file__))
 
-eyeriss_timeloop_dir = os.path.join(project_dir, 'timeloop-accelergy-exercises',
-                                    'workspace', 'exercises', '2020.ispass', 'timeloop', '06-mapper-convlayer-eyeriss')
-simba_timeloop_dir = os.path.join(project_dir, 'misc', 'simba_timeloop')
-
 dataset_dirs = {
         'mnist': os.path.join(os.path.dirname(project_dir), 'data', 'mnist'),
         'cifar10': os.path.join(os.path.dirname(project_dir), 'data', 'cifar10'),
