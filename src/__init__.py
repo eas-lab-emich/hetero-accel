@@ -4,6 +4,8 @@ import os
 
 project_dir = os.path.dirname(os.path.dirname(__file__))
 
+hetero_dataset_dir = os.environ.get('HETERO_ACCEL_DATA_DIR', '~/.hetero_cache/data')
+
 dataset_dirs = {
         'mnist': os.path.join(os.path.dirname(project_dir), 'data', 'mnist'),
         'cifar10': os.path.join(os.path.dirname(project_dir), 'data', 'cifar10'),

@@ -1,9 +1,0 @@
-nondom 47
-dom 11730
-1 Partition(s): 1
-2 Partition(s): 5
-3 Partition(s): 7
-4 Partition(s): 17
-5 Partition(s): 12
-6 Partition(s): 4
-7 Partition(s): 1
