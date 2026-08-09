@@ -9,6 +9,7 @@ from copy import deepcopy
 from types import SimpleNamespace
 from tabulate import tabulate
 from src import dataset_dirs
+from src.mapping.api import ConvolutionProblem
 from src.workload import MultiDNNWorkload
 from src.utils import env_cfg, handle_model_subapps
 from src.args import OperationMode
@@ -26,6 +27,25 @@ BASELINE_PRECISION = 8
 
 logger = logging.getLogger(__name__)
 
+def extract_problems(dnn_summary) -> list[ConvolutionProblem]:
+    eligible_layer_types = ['conv2d', 'linear']
+    layers = []
+    for layer in dnn_summary.values():
+        if layer.layer_type.lower() in eligible_layer_types:
+            layers.append(ConvolutionProblem(
+                input_channels=layer.dimensions['C'],
+                output_channels=layer.dimensions['K'],
+                input_width=layer.dimensions['Xi'],
+                input_height=layer.dimensions['Yi'],
+                padding_width=layer.dimensions['Wpad'],
+                padding_height=layer.dimensions['Hpad'],
+                stride_width=layer.dimensions['Wstr'],
+                stride_height=layer.dimensions['Hstr'],
+                batch_size=layer.dimensions['N'],
+                kernel_width=layer.dimensions['S'],
+                kernel_height=layer.dimensions['R']
+            ))
+    return layers
 
 def main():
     """Main executing function, supporting the execution of either
@@ -334,13 +354,15 @@ def accelerator_exploration(args, workload, accuracy_lut):
     accel_cfg.design_space['precision'] = precision_options
 
     logger.debug(f"Examining design space: {accel_cfg.design_space}")
+    workload = {
+        dnn_name: extract_problems(dnn.summary) for dnn_name, dnn in workload.dnns.items()
+    }
 
     # initialize and run optimizer
     optimizer = AcceleratorOptimizer(args=args,
                                      num_accelerators=len(precision_options),
                                      accelerator_cfg=accel_cfg,
-                                     workload={key: value.summary for key, value in workload.dnns.items()},
-                                     # workload=workload,
+                                     workload=workload,
                                      accuracy_lut=accuracy_lut,
                                      hw_constraints=SimpleNamespace(deadline=args.deadline_constraint,
                                                                     area=args.area_constraint),

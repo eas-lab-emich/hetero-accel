@@ -72,7 +72,7 @@ pip3 install accelergy-timeloop-infrastructure/src/accelergy-cacti-plug-in
 cp -r accelergy-timeloop-infrastructure/src/cacti "$HOME/.local/share/accelergy/estimation_plug_ins/accelergy-cacti-plug-in/"
 pip3 install accelergy-timeloop-infrastructure/src/accelergy-table-based-plug-ins
 ln -s "$(pwd)/accelergy-timeloop-infrastructure/src/timeloop/pat-public/src/pat" accelergy-timeloop-infrastructure/src/timeloop/src/pat
-scons -C accelergy-timeloop-infrastructure/src/timeloop -j4 --accelergy --static
+scons -C accelergy-timeloop-infrastructure/src/timeloop -j32 --accelergy --static
 cp -r accelergy-timeloop-infrastructure/src/timeloop/build/timeloop-* ~/.local/bin
 cd generalizedassignmentsolver || { echo "Failed to enter generalizedassignmentsolver directory, aborting"; return 1; }
 bazel build -- ...

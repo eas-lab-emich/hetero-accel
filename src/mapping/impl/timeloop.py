@@ -5,7 +5,6 @@ import shutil
 import subprocess
 import yaml
 
-from collections import namedtuple
 from copy import deepcopy
 from glob import glob
 from time import time
@@ -13,18 +12,14 @@ from types import SimpleNamespace
 from uuid import UUID
 
 from src import project_dir
-from src.mapping.api.accelerator import AcceleratorConfiguration
-from src.mapping.api.mapping_request import MappingRequest
-from src.mapping.api.problem import ConvolutionProblem
+from src.mapping.api import AcceleratorConfiguration, ConvolutionProblem, MappingRequest, MappingStats, \
+    AcceleratorMapper
 
-__all__ = ['MappingStats', 'TimeloopWrapper', 'TimeloopTemplate', 'TimeloopProblem', 'TimeloopArch', 'TimeloopMapper']
+__all__ = ['TimeloopWrapper', 'TimeloopTemplate', 'TimeloopProblem', 'TimeloopArch', 'TimeloopMapper']
 
 logger = logging.getLogger(__name__)
 
 TIMELOOP_ACCELERGY_VERSION = 0.4
-
-MappingStats = namedtuple('MappingStats', ['gflops', 'utilization', 'cycles',
-                                           'energy', 'edp', 'area'])
 
 
 def force_quotes_on_str(nested_dict, filter_fn=None):
@@ -57,7 +52,7 @@ def force_quotes_on_str(nested_dict, filter_fn=None):
     recursion_f(nested_dict)
 
 
-class TimeloopWrapper:
+class TimeloopWrapper(AcceleratorMapper):
     """Wrapper for Timeloop+Accelergy tool
     """
 
@@ -69,6 +64,8 @@ class TimeloopWrapper:
         self.mapper = TimeloopMapper(mapper_file=os.path.join(self.workdir, 'mapper.yaml'))
 
     def map(self, request: MappingRequest) -> MappingStats:
+        logger.debug(f"Evaluating MappingRequest with id={request.id}, name={request.name}")
+
         request_dir = os.path.join(self.workdir, str(request.id))
         os.makedirs(request_dir, exist_ok=True)
 
@@ -104,13 +101,15 @@ class TimeloopWrapper:
         completed_process = subprocess.run(["bash", "-lc", command], check=True, capture_output=True)
         logger.debug(f"Executed timeloop-mapper command in {time() - start:.3e}s "
                      f"with exitcode: {completed_process.returncode}")
-        results = self._get_results(output_dir)
+        results = self._get_results(request.id, output_dir)
         if self.cleanup:
             shutil.rmtree(request_dir)
+        logger.debug(f"Layer-wise results: "
+                          f"id={request.id}, name={request.name}, energy={results.energy:.3e}, latency={results.cycles:.3e}, edp={results.edp:.3e}")
         return results
 
     @staticmethod
-    def _get_results(output_dir) -> MappingStats:
+    def _get_results(uuid: UUID, output_dir) -> MappingStats:
         """Get the results of a succesfull run from Timeloop. Note, timeloop provides
            a script that does a more analytical parsing: 
            https://github.com/NVlabs/timeloop/blob/master/scripts/parse_timeloop_output.py#L55
@@ -154,7 +153,9 @@ class TimeloopWrapper:
         # if area is 0.0 from the stats file, we override with ART values
         area = _get_area_from_ART() if float(area) <= 0.0 else float(area)
 
-        return MappingStats(gflops, utilization, cycles, energy, edp, area)
+        return MappingStats(id=uuid, gflops=gflops, utilization=utilization,
+                            cycles=cycles, energy=energy, edp=edp,
+                            area=area)
 
     def adjust_architecture(self, accelerator: AcceleratorConfiguration):
         """Adjust the architectural parameters of the accelerator
@@ -665,7 +666,6 @@ class TimeloopMapper:
         with open(filepath, 'w') as f:
             f.write(yaml.dump({'mapper': self.config}))
 
-
 # TODO incorporate into a mock of timeloop wrapper
 # def timeloop_execution_mock(timeloop_wrapper: TimeloopWrapper, problem_name: str) -> TimeloopStats:
 #     energy_base=6.608e+04
@@ -676,5 +676,3 @@ class TimeloopMapper:
 #     area = uniform(area_base - 1, area_base + 1)
 #     return TimeloopStats(gflops=None, utilization=None, energy=energy, cycles=latency,
 #                             edp=energy * latency, area=area)
-
-

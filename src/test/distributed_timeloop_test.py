@@ -9,10 +9,9 @@ from src.accelerator_cfg import AcceleratorProfile, AcceleratorType
 from src.args import OptimizerType
 import logging
 
-from src import project_dir, hetero_dataset_dir
+from src import hetero_dataset_dir
 from src.mapping.api import ConvolutionProblem, AcceleratorConfiguration, MappingRequest
-from src.mapping.impl.async_timeloop import AsyncTimeloopMapper
-from src.mapping.impl.timeloop import TimeloopWrapper
+from src.mapping.impl.distributed_timeloop import DistributedTimeloopMapper
 from src.net_wrapper import TorchNetworkWrapper
 
 logger = logging.getLogger(__name__)
@@ -63,16 +62,21 @@ def timeloop_test():
     )
 
     logger.info(f'Accelerator:{accelerator_config}')
-    # tw = TimeloopWrapper(project_dir + '/test_tl_2', cleanup=False)
-    mapper = AsyncTimeloopMapper(project_dir + '/test_tl_2', cleanup=False)
-    results = mapper.map(request).result(5000)
-    print(results)
-    del net_wrapper.model
-    del net_wrapper
-    gc.collect()
-    import torch
-    torch.cuda.empty_cache()
-    exit(0)
+    mapper = DistributedTimeloopMapper()
+    try:
+        mapper.start()
+        results = mapper.map(request).result(500)
+        print(results)
+    except Exception as e:
+        print(e)
+    finally:
+        del net_wrapper.model
+        del net_wrapper
+        gc.collect()
+        import torch
+        torch.cuda.empty_cache()
+        mapper.stop()
+        exit(0)
 
 
 if __name__ == "__main__":

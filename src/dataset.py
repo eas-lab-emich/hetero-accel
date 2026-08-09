@@ -6,6 +6,8 @@ import torch.utils.data
 from crimson_magick.cifar_zoo import get_test_loader, Cifar
 from torchvision import transforms
 import torchvision.datasets as datasets
+
+from src import hetero_dataset_dir
 from src.datasets.imagenet_dataset import ImagenetDataset
 
 logger = logging.getLogger(__name__)
@@ -23,7 +25,7 @@ def load_data(dataset, dataset_path, arch, batch_size, workers,
         'drop_last': False
     }
     if "cifar" in dataset:
-        return None, None, get_test_loader(Cifar[dataset.upper()], loader_kwargs)
+        return None, None, get_test_loader(Cifar[dataset.upper()], loader_kwargs, data_dir=hetero_dataset_dir)
 
     dataset_fn = __dataset_factory(dataset, batch_size=batch_size)
     train_loader, valid_loader, test_loader = get_data_loaders(dataset_fn, dataset_path, arch, batch_size, workers,

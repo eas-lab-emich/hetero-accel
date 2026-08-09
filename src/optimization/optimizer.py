@@ -1,10 +1,11 @@
+import itertools
 import logging
 import random
 import os.path
 import math
 import pickle
+import uuid
 from concurrent.futures import as_completed
-from concurrent.futures.thread import ThreadPoolExecutor
 from types import SimpleNamespace
 from collections import OrderedDict
 from time import time
@@ -14,10 +15,12 @@ from simanneal import Annealer
 from src.evaluation_result import EvaluationResult
 from src.logging.subaccelerator_params_logger import SubacceleratorParamsLogger
 from src.logging.accelerator_metric_logger import AcceleratorMetricLogger
+from src.mapping.api import AcceleratorConfiguration, MappingRequest
+from src.mapping.impl.async_timeloop import AsyncTimeloopMapper
+from src.mapping.impl.distributed_timeloop import DistributedTimeloopMapper
 
 from src.optimization.evaluation import SchedulePenalizer
 from src.optimization.scheduling import SolverType, Scheduler
-from src.worker.timeloop import TimeloopWrapper, timeloop_execution
 from src.utils import get_contents_table
 
 __all__ = ['DesignSpace', 'AcceleratorOptimizer']
@@ -109,7 +112,9 @@ class AcceleratorOptimizer(Annealer):
                                         **accelerator_cfg.design_space)
 
         # initialize timeloop
-        self.init_timeloop()
+        # self.accelerator_mapper = AsyncTimeloopMapper(os.path.join(self.logdir, 'mapper_workspace'))
+        self.accelerator_mapper = DistributedTimeloopMapper()
+        self.accelerator_mapper.start()
         # initialize scheduler
         self.scheduler = Scheduler(args.scheduler_type)
         self.schedule_penalizer = SchedulePenalizer(self.accuracy_lut)
@@ -159,37 +164,7 @@ class AcceleratorOptimizer(Annealer):
     def close(self):
         self.accelerator_metric_logger.close()
         self.subaccelerator_params_logger.close()
-        del self.workload
-
-    def init_timeloop(self, timeloop_workdir=None):
-        """Initialize timeloop wrapper object
-        """
-        if timeloop_workdir is None:
-            timeloop_workdir = os.path.join(self.logdir, 'timeloop_simanneal')
-        self.timeloop_wrapper = TimeloopWrapper(self.accelerator_cfg.type, timeloop_workdir)
-
-        # prepare each layer for timeloop simulations
-        self.timeloop_problems_per_dnn = {}
-        self.timeloop_problem_to_layer_name = {}
-        for arch, summaries in self.workload.items():
-            self.timeloop_problems_per_dnn[arch] = []
-            self.timeloop_problem_to_layer_name[arch] = {}
-            layers_to_consider = ['conv2d', 'linear']
-            layer_idx = 0
-            for layer_name, layer_info in summaries.items():
-                if layer_info.layer_type.lower() not in layers_to_consider:
-                    continue
-
-                problem_name = f'{arch}__layer{layer_idx}_{layer_name}'
-                self.timeloop_problems_per_dnn[arch].append(problem_name)
-                self.timeloop_problem_to_layer_name[arch][problem_name] = layer_name
-
-                problem_filepath = os.path.join(self.timeloop_wrapper.workload_dir, problem_name + '.yaml')
-                self.timeloop_wrapper.init_problem(problem_name,
-                                                   layer_info.layer_type,
-                                                   layer_info.dimensions,
-                                                   problem_filepath)
-                layer_idx += 1
+        self.accelerator_mapper.stop()
 
     def get_initial_state(self):
         """Configure the initial state of the optimizer, w.r.t. the
@@ -290,7 +265,7 @@ class AcceleratorOptimizer(Annealer):
             energy=self.latest_energy,
             latency=self.latest_latency,
             edp=self.latest_edp,
-            penalty = self.latest_penalty,
+            penalty=self.latest_penalty,
             area=self.latest_area,
             scheduled=self.latest_schedule,
             penalty_details=self.latest_penalty_details,
@@ -416,75 +391,81 @@ class AcceleratorOptimizer(Annealer):
         energy_dict = {}
         latency_dict = {}
         edp_dict = {}
-        results = None
 
-        # iterate over each accelerator
-        for accelerator in self.state:
-            logger.info(f"\tEvaluating on accelerator: {accelerator._asdict()}")
-            # iterate over each DNN
-            for arch in self.workload.keys():
-                logger.info(f"\t\tEvaluating on DNN: {arch}")
+        deferred_mappings = {}
+        for accelerator, (dnn_name, layers) in itertools.product(self.state, self.workload.items()):
+            logger.info(f"\t\tQueuing evaluation on aceelerator={accelerator}, dnn={dnn_name}")
 
-                # check if this evaluation was executed before
-                if (arch, accelerator) in self.energy_dict:
-                    # NOTE: This is not as accurate as accumulate layer-wise EDP results,
-                    #       but it is a good approximation for not re-running the simulation
-                    if (arch, accelerator) not in self.edp_dict:
-                        self.edp_dict[(arch, accelerator)] = self.energy_dict[(arch, accelerator)] * self.latency_dict[
-                            (arch, accelerator)]
-                    logger.info(f"\t\tSkipping evaluation: already estimated")
-                    continue
+            # check if this evaluation was executed before
+            if (dnn_name, accelerator) in self.energy_dict:
+                # NOTE: This is not as accurate as accumulate layer-wise EDP results,
+                #       but it is a good approximation for not re-running the simulation
+                if (dnn_name, accelerator) not in self.edp_dict:
+                    self.edp_dict[(dnn_name, accelerator)] = self.energy_dict[(dnn_name, accelerator)] * \
+                                                             self.latency_dict[
+                                                                 (dnn_name, accelerator)]
+                logger.info(f"\t\tSkipping evaluation: already estimated")
+                continue
 
-                # check accuracy constraint
-                if violated_accuracy_constraint(arch, accelerator.precision):
-                    logger.info(f"\t\tSkipping evaluation: accuracy violation")
-                    # Invalid scheduling mappings are marked with negative weight (latency)
-                    self.energy_dict[(arch, accelerator)] = -1
-                    self.latency_dict[(arch, accelerator)] = -1
-                    self.edp_dict[(arch, accelerator)] = -1
-                    continue
+            # check accuracy constraint
+            if violated_accuracy_constraint(dnn_name, accelerator.precision):
+                logger.info(f"\t\tSkipping evaluation: accuracy violation")
+                # Invalid scheduling mappings are marked with negative weight (latency)
+                self.energy_dict[(dnn_name, accelerator)] = -1
+                self.latency_dict[(dnn_name, accelerator)] = -1
+                self.edp_dict[(dnn_name, accelerator)] = -1
+                continue
 
-                # adjust timeloop with the accelerator parameters
-                self.timeloop_wrapper.adjust_architecture(accelerator)
+            energy_dict[(dnn_name, accelerator)] = 0
+            latency_dict[(dnn_name, accelerator)] = 0
+            edp_dict[(dnn_name, accelerator)] = 0
+            # iterate over each timeloop problem (layer) of the DNN
+            for layer in layers:
+                accelerator_config = AcceleratorConfiguration(
+                    pe_array_x=accelerator.pe_array_x,
+                    pe_array_y=accelerator.pe_array_y,
+                    precision=accelerator.precision,
+                    sram_size=accelerator.sram_size,
+                    ifmap_spad_size=accelerator.ifmap_spad_size,
+                    weights_spad_size=accelerator.weights_spad_size,
+                    psum_spad_size=accelerator.psum_spad_size
+                )
+                request = MappingRequest(
+                    id=uuid.uuid4(),
+                    accelerator_config=accelerator_config,
+                    problem=layer
+                )
+                deferred_mappings[self.accelerator_mapper.map(request)] = (dnn_name, accelerator)
 
-                energy_dict[(arch, accelerator)] = 0
-                latency_dict[(arch, accelerator)] = 0
-                edp_dict[(arch, accelerator)] = 0
-                # iterate over each timeloop problem (layer) of the DNN
-                with ThreadPoolExecutor(max_workers=32) as executor:
-                    tasks = {
-                        executor.submit(timeloop_execution, self.timeloop_wrapper, problem_name): problem_name
-                        # executor.submit(timeloop_execution_mock, self.timeloop_wrapper, problem_name): problem_name
-                        for problem_name in self.timeloop_problems_per_dnn[arch]
-                    }
+        for deferred in as_completed(deferred_mappings):
+            metric_key = deferred_mappings[deferred]
+            try:
+                results = deferred.result()
+                energy_dict[metric_key] += results.energy
+                latency_dict[metric_key] += results.cycles
+                edp_dict[metric_key] += results.edp
 
-                    for future in as_completed(tasks):
-                        problem_name = tasks[future]
-                        try:
-                            results = future.result()
-                            energy_dict[(arch, accelerator)] += results.energy
-                            latency_dict[(arch, accelerator)] += results.cycles
-                            edp_dict[(arch, accelerator)] += results.edp
-                        except FileNotFoundError:
-                            self.latest_schedule = self.latest_energy = self.latest_latency = None
-                            logger.error(f"Invalid timeloop/accelergy simulation for {problem_name}")
-                            executor.shutdown(wait=False, cancel_futures=True)
-                            return EvaluationResult.INVALID_SIMULATION
+                # store the accelerator area from the results of the last mapping
+                # all layers with the same accelerator should give the same area
+                _, accelerator = metric_key
+                if accelerator not in self.area_dict:
+                    self.area_dict[accelerator] = getattr(results, 'area', None)
+                    logger.debug(f"\tSet accelerator area: {self.area_dict[accelerator]}")
+            except FileNotFoundError: # TODO add specific exception
+                self.latest_schedule = self.latest_energy = self.latest_latency = None
+                logger.error(f"Invalid timeloop/accelergy simulation for {metric_key}")
+                return EvaluationResult.INVALID_SIMULATION # TODO retry logic? Add cancel method to mapper?
 
-                logger.debug(f"\t\tEvaluation results for {arch} on {accelerator}:\n"
-                             f"\t\t\tEnergy={energy_dict[(arch, accelerator)]:.3e}\n"
-                             f"\t\t\tLatency={latency_dict[(arch, accelerator)]:.3e}\n"
-                             f"\t\t\tEDP={edp_dict[(arch, accelerator)]:.3e}")
+        for dnn_name, accelerator in energy_dict.keys():
+            logger.debug(f"\t\tEvaluation results for {dnn_name} on {accelerator}:\n"
+                         f"\t\t\tEnergy={energy_dict[(dnn_name, accelerator)]:.3e}\n"
+                         f"\t\t\tLatency={latency_dict[(dnn_name, accelerator)]:.3e}\n"
+                         f"\t\t\tEDP={edp_dict[(dnn_name, accelerator)]:.3e}")
 
-            # update stored metrics with executed evaluations
-            self.energy_dict.update(energy_dict)
-            self.latency_dict.update(latency_dict)
-            self.edp_dict.update(edp_dict)
-            # store the accelerator area from the results of the last mapping
-            # all layers with the same accelerator should give the same area
-            if accelerator not in self.area_dict:
-                self.area_dict[accelerator] = getattr(results, 'area', None)
-            logger.debug(f"\tAccelerator area: {self.area_dict[accelerator]}")
+        # update stored metrics with executed evaluations
+        self.energy_dict.update(energy_dict)
+        self.latency_dict.update(latency_dict)
+        self.edp_dict.update(edp_dict)
 
         logger.info("Completed mapping evaluation")
 
