@@ -1,0 +1,3 @@
+#!/bin/bash
+source "$ACCEL_VENV_DEST"/bin/activate
+exec accelergy "$@"
