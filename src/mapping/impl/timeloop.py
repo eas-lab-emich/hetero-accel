@@ -76,6 +76,7 @@ class TimeloopWrapper(AcceleratorMapper):
         os.makedirs(arch_dir, exist_ok=True)
         architecture = TimeloopArch(arch_dir, component_files=self.template.arch_components)
         architecture.adjust(request.accelerator_config)
+        architecture.to_yaml()
 
         constraint_dir = os.path.join(request_dir, 'constraints')
         os.makedirs(constraint_dir, exist_ok=True)
@@ -286,11 +287,6 @@ class TimeloopArch:
                                 for component_file in component_files]
         self.arch_filepath = os.path.join(workdir, 'architecture.yaml')
 
-        self.get_default_params = self._get_default_params_eyeriss
-        self.get_config = self._get_config_eyeriss
-        self.adjust = self._adjust_eyeriss
-        self.adjust_precision = self._adjust_precision_eyeriss
-
         # initialize dict with parameters
         self.get_default_params()
         self.init_params = deepcopy(self.params)
@@ -385,7 +381,7 @@ class TimeloopArch:
 
     ### Accelerator-specific functions: Eyeriss ###
 
-    def _adjust_eyeriss(self, accelerator: AcceleratorConfiguration):
+    def adjust(self, accelerator: AcceleratorConfiguration):
         """Adjust the parameter of the architecture based on the
            given accelerator instance
         """
@@ -394,13 +390,13 @@ class TimeloopArch:
         #       and the change in precision
         self.adjust_pe_array(accelerator.pe_array_x,
                              accelerator.pe_array_y)
-        self._adjust_memories_eyeriss(accelerator.sram_size,
+        self.adjust_memories(accelerator.sram_size,
                                       accelerator.ifmap_spad_size,
                                       accelerator.weights_spad_size,
                                       accelerator.psum_spad_size)
-        self._adjust_precision_eyeriss(accelerator.precision)
+        self.adjust_precision(accelerator.precision)
 
-    def _adjust_memories_eyeriss(self, sram_size, ifmap_spad_size,
+    def adjust_memories(self, sram_size, ifmap_spad_size,
                                  weights_spad_size, psum_spad_size):
         """Adjust each specific memory unit of the Eyeriss-like accelerator
         """
@@ -412,7 +408,7 @@ class TimeloopArch:
         }
         self.adjust_params(params)
 
-    def _adjust_precision_eyeriss(self, precision):
+    def adjust_precision(self, precision):
         """Adjust the data precision of the Eyeriss sarchitecture, including memory and compute units.
            We only change the parameters of the MAC unit and the scratchpads, not the DRAM or SRAM.
         """
@@ -452,7 +448,7 @@ class TimeloopArch:
         }
         self.adjust_params(params)
 
-    def _get_default_params_eyeriss(self):
+    def get_default_params(self):
         """Get the default parameters for all levels of an
            Eyeriss-like architecture
         """
@@ -507,7 +503,7 @@ class TimeloopArch:
         self.params.mac_class = 'intmac'
         self.params.mac_datawidth = 16
 
-    def _get_config_eyeriss(self):
+    def get_config(self):
         """Write the architectural description of an Eyeriss-like
            architecture in a dict format
         """

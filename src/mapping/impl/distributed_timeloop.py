@@ -116,8 +116,9 @@ class DistributedTimeloopMapper(AsyncAcceleratorMapper):
         with self._pending_lock:
             future = self._pending_mappings.pop(result.id, None)
         if future is None:
-            logger.warning('No future found for id=%s', result.id)
+            logger.warning('No future found for id=%s, result=%s', result.id, result)
         else:
+            logger.info('Received result for id=%s, result=%s', result.id, result)
             future.set_result(result)
         ch.basic_ack(method.delivery_tag)
 
