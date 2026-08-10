@@ -113,7 +113,7 @@ def main():
 
                     channel.basic_nack(
                         delivery_tag=pending_mapping.delivery_tag,
-                        requeue=False, # send to DLQ instead?
+                        requeue=True, # send to DLQ instead?
                     )
 
     finally:
