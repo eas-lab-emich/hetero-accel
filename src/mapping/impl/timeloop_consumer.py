@@ -1,5 +1,6 @@
 import logging
 import os
+import signal
 from concurrent.futures import FIRST_COMPLETED, Future, wait
 from dataclasses import dataclass
 
@@ -33,6 +34,15 @@ class PendingMapping:
 
 pending: dict[Future, PendingMapping] = {}
 
+running = True
+
+def handle_shutdown(signum, frame):
+    global running
+    logger.info("Received signal %s; shutting down", signum)
+    running = False
+
+signal.signal(signal.SIGTERM, handle_shutdown)
+signal.signal(signal.SIGINT, handle_shutdown)
 
 def main():
     username, password, host = get_mq_config()
@@ -54,7 +64,7 @@ def main():
     max_parallel = os.cpu_count() or 1
 
     try:
-        while True:
+        while running:
             while len(pending) < max_parallel:
                 method, properties, body = channel.basic_get(
                     queue=REQUEST_QUEUE,
@@ -118,6 +128,7 @@ def main():
                     )
 
     finally:
+        logger.info("Closing RabbitMQ connection")
         connection.close()
 
 
