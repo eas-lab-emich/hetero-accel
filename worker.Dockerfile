@@ -36,7 +36,7 @@ FROM ubuntu:22.04
 LABEL org.opencontainers.image.title="Hetero-Accel Timeloop Worker"
 LABEL org.opencontainers.image.description="Distributed Timeloop/Accelergy mapping worker for Hetero-Accel"
 LABEL org.opencontainers.image.source="https://github.com/eas-lab-emich/hetero-accel"
-LABEL org.opencontainers.image.version="0.0.2"
+LABEL org.opencontainers.image.version="0.0.3"
 
 ARG BIN_DEST
 ARG SRC_DIR

@@ -49,6 +49,7 @@ def main():
 
     channel.queue_declare(queue=REQUEST_QUEUE, durable=True)
     channel.queue_declare(queue=RESULTS_QUEUE, durable=True)
+    channel.confirm_delivery()
 
     max_parallel = os.cpu_count() or 1
 
