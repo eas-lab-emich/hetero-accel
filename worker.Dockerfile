@@ -36,7 +36,7 @@ FROM ubuntu:22.04
 LABEL org.opencontainers.image.title="Hetero-Accel Timeloop Worker"
 LABEL org.opencontainers.image.description="Distributed Timeloop/Accelergy mapping worker for Hetero-Accel"
 LABEL org.opencontainers.image.source="https://github.com/eas-lab-emich/hetero-accel"
-LABEL org.opencontainers.image.version="0.0.3"
+LABEL org.opencontainers.image.version="0.0.4"
 
 ARG BIN_DEST
 ARG SRC_DIR
@@ -52,12 +52,12 @@ RUN apt-get update && \
 COPY --from=build $ACCEL_VENV_DEST $ACCEL_VENV_DEST
 COPY --from=build $WORK_DIR/$SRC_DIR/cacti $BIN_DEST/cacti
 COPY --from=build $WORK_DIR/$SRC_DIR/timeloop/build/timeloop-* $BIN_DEST
-COPY setup/accelergy $BIN_DEST/accelergy
-COPY src src
-COPY timeloop-accelergy-exercises timeloop-accelergy-exercises
 
 ENV PATH="$WORK_DIR/.venv/bin:$PATH"
+COPY timeloop-accelergy-exercises timeloop-accelergy-exercises
+COPY setup/accelergy $BIN_DEST/accelergy
 RUN python3.11 -m venv .venv && \
   pip3 install pydantic pika pyyaml
+COPY src src
 
 ENTRYPOINT ["python", "-m", "src.mapping.impl.timeloop_consumer"]
