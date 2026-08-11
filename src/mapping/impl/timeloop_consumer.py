@@ -61,7 +61,9 @@ def main():
     channel.queue_declare(queue=RESULTS_QUEUE, durable=True)
     channel.confirm_delivery()
 
-    max_parallel = os.cpu_count() or 1
+    max_parallel = async_mapper.get_parallelism()
+
+    logger.info("Setting max_parallel=%d", max_parallel)
 
     try:
         while running:
@@ -101,6 +103,7 @@ def main():
 
                 try:
                     result = future.result()
+                    logger.info("Persisting results=%s", result)
 
                     channel.basic_publish(
                         exchange="",

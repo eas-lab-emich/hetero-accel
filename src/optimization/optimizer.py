@@ -437,6 +437,8 @@ class AcceleratorOptimizer(Annealer):
                 )
                 deferred_mappings[self.accelerator_mapper.map(request)] = (dnn_name, accelerator)
 
+        deferred_count = len(deferred_mappings.values())
+        completed = 0
         for deferred in as_completed(deferred_mappings):
             metric_key = deferred_mappings[deferred]
             try:
@@ -444,17 +446,21 @@ class AcceleratorOptimizer(Annealer):
                 energy_dict[metric_key] += results.energy
                 latency_dict[metric_key] += results.cycles
                 edp_dict[metric_key] += results.edp
+                completed += 1
+
+                logger.info(
+                    f"Received results for (accel,dnn)={metric_key}, id={results.id}, mappings_complete={completed}/{deferred_count}")
 
                 # store the accelerator area from the results of the last mapping
                 # all layers with the same accelerator should give the same area
                 _, accelerator = metric_key
                 if accelerator not in self.area_dict:
                     self.area_dict[accelerator] = getattr(results, 'area', None)
-                    logger.debug(f"\tSet accelerator area: {self.area_dict[accelerator]}")
-            except FileNotFoundError: # TODO add specific exception
+                    logger.info(f"\tSet accelerator area: {self.area_dict[accelerator]}")
+            except FileNotFoundError:  # TODO add specific exception
                 self.latest_schedule = self.latest_energy = self.latest_latency = None
                 logger.error(f"Invalid timeloop/accelergy simulation for {metric_key}")
-                return EvaluationResult.INVALID_SIMULATION # TODO retry logic? Add cancel method to mapper?
+                return EvaluationResult.INVALID_SIMULATION  # TODO retry logic? Add cancel method to mapper?
 
         for dnn_name, accelerator in energy_dict.keys():
             logger.debug(f"\t\tEvaluation results for {dnn_name} on {accelerator}:\n"

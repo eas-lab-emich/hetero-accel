@@ -17,6 +17,8 @@ from src.mapping.api import AcceleratorConfiguration, ConvolutionProblem, Mappin
 
 __all__ = ['TimeloopWrapper', 'TimeloopTemplate', 'TimeloopProblem', 'TimeloopArch', 'TimeloopMapper']
 
+from src.mapping.impl.timeloop_threads import get_tl_thread_count
+
 logger = logging.getLogger(__name__)
 
 TIMELOOP_ACCELERGY_VERSION = 0.4
@@ -64,7 +66,7 @@ class TimeloopWrapper(AcceleratorMapper):
         self.mapper = TimeloopMapper(mapper_file=os.path.join(self.workdir, 'mapper.yaml'))
 
     def map(self, request: MappingRequest) -> MappingStats:
-        logger.debug(f"Evaluating MappingRequest with id={request.id}, name={request.name}")
+        logger.info(f"Evaluating MappingRequest with id={request.id}, name={request.name}")
 
         request_dir = os.path.join(self.workdir, str(request.id))
         os.makedirs(request_dir, exist_ok=True)
@@ -100,8 +102,8 @@ class TimeloopWrapper(AcceleratorMapper):
         logger.debug(f'timeloop-mapper command: {command}')
         start = time()
         completed_process = subprocess.run(["bash", "-lc", command], check=True, capture_output=True)
-        logger.debug(f"Executed timeloop-mapper command in {time() - start:.3e}s "
-                     f"with exitcode: {completed_process.returncode}")
+        logger.info(f"Evaluated MappingRequest with id={request.id}, name={request.name}, duration={time() - start:.3e}s "
+                     f", exitcode={completed_process.returncode}")
         results = self._get_results(request.id, output_dir)
         if self.cleanup:
             shutil.rmtree(request_dir)
@@ -614,7 +616,6 @@ class TimeloopArch:
 
         self.config = config
 
-
 # TODO turn into function
 class TimeloopMapper:
     """Utility wrapper class fot the mapping optimizer
@@ -629,10 +630,13 @@ class TimeloopMapper:
     def _get_params(self):
         """Collect the default configuration parameters of the mapper 
         """
+
+        tl_thread_count = get_tl_thread_count()
+        logger.info("tl_thread_count=%d", tl_thread_count)
         self.params = SimpleNamespace()
         self.params.optimization_metrics = ['edp']
         self.params.live_status = False
-        self.params.num_threads = 8
+        self.params.num_threads = tl_thread_count
         self.params.timeout = 15000
         self.params.victory_condition = 500
         self.params.algorithm = 'random-pruned'
