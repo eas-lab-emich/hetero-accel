@@ -2,6 +2,7 @@ import logging
 import multiprocessing
 from concurrent.futures import Future
 from concurrent.futures.thread import ThreadPoolExecutor
+from math import ceil
 
 from src.mapping.api import MappingStats, MappingRequest
 from src.mapping.api.mapper import AsyncAcceleratorMapper
@@ -13,7 +14,7 @@ logger = logging.getLogger(__name__)
 class AsyncTimeloopMapper(AsyncAcceleratorMapper):
 
     def __init__(self, workdir, *, cleanup=True):
-        max_workers = multiprocessing.cpu_count()
+        max_workers = ceil(multiprocessing.cpu_count() / 4)
         logger.info("Initializing AsyncTimeloopMapper with max_workers=%s", max_workers)
         self.executor = ThreadPoolExecutor(max_workers=max_workers)
         self.timeloop_mapper = TimeloopWrapper(workdir, cleanup=cleanup)

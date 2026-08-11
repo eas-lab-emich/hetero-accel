@@ -394,7 +394,7 @@ class AcceleratorOptimizer(Annealer):
 
         deferred_mappings = {}
         for accelerator, (dnn_name, layers) in itertools.product(self.state, self.workload.items()):
-            logger.info(f"\t\tQueuing evaluation on aceelerator={accelerator}, dnn={dnn_name}")
+            logger.info(f"\t\tQueuing evaluation on accelerator={accelerator}, dnn={dnn_name}")
 
             # check if this evaluation was executed before
             if (dnn_name, accelerator) in self.energy_dict:

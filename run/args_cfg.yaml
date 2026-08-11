@@ -63,7 +63,7 @@ simanneal_args:
         simannel_state_delta: 0.4
         simanneal_Tmax: 25000.0
         simanneal_Ttmin: 2.5
-        simanneal_steps: 25
+        simanneal_steps: 50
 #        simanneal_updates: 25 # NOT USED
         simanneal_auto_schedule: False
         simanneal_optimization_metric: edp_artificial
