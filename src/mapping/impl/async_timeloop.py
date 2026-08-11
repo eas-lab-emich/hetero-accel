@@ -14,7 +14,7 @@ logger = logging.getLogger(__name__)
 class AsyncTimeloopMapper(AsyncAcceleratorMapper):
 
     def __init__(self, workdir, *, cleanup=True):
-        max_workers = ceil(multiprocessing.cpu_count() / 4)
+        max_workers = multiprocessing.cpu_count()
         logger.info("Initializing AsyncTimeloopMapper with max_workers=%s", max_workers)
         self.executor = ThreadPoolExecutor(max_workers=max_workers)
         self.timeloop_mapper = TimeloopWrapper(workdir, cleanup=cleanup)
