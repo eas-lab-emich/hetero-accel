@@ -632,7 +632,7 @@ class TimeloopMapper:
         self.params = SimpleNamespace()
         self.params.optimization_metrics = ['edp']
         self.params.live_status = False
-        self.params.num_threads = 4
+        self.params.num_threads = 8
         self.params.timeout = 15000
         self.params.victory_condition = 500
         self.params.algorithm = 'random-pruned'
