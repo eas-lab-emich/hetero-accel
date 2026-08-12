@@ -1,6 +1,7 @@
 from collections import namedtuple
 
 import numpy as np
+import pandas as pd
 
 from src.optimization.scheduling import Schedule
 
@@ -23,10 +24,9 @@ class SchedulePenalizer:
 
     def penalize(self, schedule: Schedule) -> Penalty:
         self.schedule_history.append(schedule)
-        # p1 = self.__compute_p1(self.schedule_history)
+        p1 = self.__compute_p1(self.schedule_history)
         # p2 = self.__compute_p2(self.schedule_history)
         # p3 = self.__compute_p3(self.schedule_history)
-        p1 = 0
         p2 = 0
         p3 = 0
         total_penalty = (self.lambda_p1 * p1 + self.lambda_p2 * p2 + self.lambda_p3 * p3)
@@ -36,16 +36,23 @@ class SchedulePenalizer:
                        self.window_size, self.risk_threshold)
 
     def __compute_p1(self, schedule_history):
-        schedules = schedule_history[:-self.window_size + 1]
-        accumulated_risk = 0
-        for start_idx in range(len(schedules)):
-            window_sum = 0
-            windowed = schedule_history[start_idx: start_idx + self.window_size]
-            for schedule in windowed:
-                window_sum += self.__aggregate_loss(schedule)
-            if window_sum > self.risk_threshold:
-                accumulated_risk += window_sum - self.risk_threshold
-        return accumulated_risk
+        schedule = schedule_history[-1]
+        min_accuracies = self.accuracy_lut.loc[
+            self.accuracy_lut[self.accuracy_lut["Valid"] == 1].groupby("Network")["Accuracy"].idxmin()
+        ].set_index("Network")["Accuracy"]
+
+        max_accuracies = self.accuracy_lut.loc[
+            self.accuracy_lut[self.accuracy_lut["Valid"] == 1].groupby("Network")["Accuracy"].idxmax()
+        ].set_index("Network")["Accuracy"]
+
+        total_budget = (max_accuracies - min_accuracies).sum()
+
+        accel_accuracies = pd.DataFrame.from_dict(schedule.assigned, orient="index") \
+            .reset_index(names="Network").rename(columns={"precision": "QuantBits"}) \
+            .merge(self.accuracy_lut, on=["Network", "QuantBits"]).set_index("Network")["Accuracy"]
+
+        budget_used = (max_accuracies - accel_accuracies).sum()
+        return total_budget - budget_used
 
     def __compute_p2(self, schedule_history):
         streak = 0
