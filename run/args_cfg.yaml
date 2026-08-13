@@ -57,13 +57,13 @@ compression_args:
 accel_args:
         accelerator_arch_type: eyeriss
         deadline_constraint: null
-        area_constraint: 0.1
+        area_constraint: 0.3
 
 simanneal_args:
         simannel_state_delta: 0.4
-        simanneal_Tmax: 25000.0
-        simanneal_Ttmin: 2.5
-        simanneal_steps: 50
+        simanneal_Tmax: 50000000000000000.0
+        simanneal_Tmin: 8000000000000000.0
+        simanneal_steps: 125
 #        simanneal_updates: 25 # NOT USED
         simanneal_auto_schedule: False
         simanneal_optimization_metric: edp_artificial

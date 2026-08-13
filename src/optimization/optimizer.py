@@ -261,6 +261,7 @@ class AcceleratorOptimizer(Annealer):
         self.accelerator_metric_logger.log(
             iteration=self.step,
             is_improved=improvement,
+            is_accepted=acceptance,
             sim_temperature=T,
             energy=self.latest_energy,
             latency=self.latest_latency,
@@ -475,12 +476,12 @@ class AcceleratorOptimizer(Annealer):
 
         logger.info("Completed mapping evaluation")
 
-        # check the area constraint
         self.latest_area = sum([self.area_dict[accelerator] for accelerator in self.state])
-        if violated_area_constraint(self.latest_area):
-            self.latest_schedule = self.latest_energy = self.latest_latency = self.latest_edp = None
-            logger.info("Violated area constraint")
-            return EvaluationResult.AREA_CONSTRAINT
+        # check the area constraint #TODO do we keep this long term or remove? It's a completely different objective...
+        # if violated_area_constraint(self.latest_area):
+        #     self.latest_schedule = self.latest_energy = self.latest_latency = self.latest_edp = None
+        #     logger.info("Violated area constraint")
+        #     return EvaluationResult.AREA_CONSTRAINT
 
         # perform the scheduling and get a concrete DNN-to-accelerator mapping
         start = time()

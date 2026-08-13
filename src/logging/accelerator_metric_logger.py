@@ -12,6 +12,7 @@ class AcceleratorMetricLogger(MetricLogger):
         self._write_row(
             ["step",
              "is_improved",
+             "is_accepted",
              "sim_temperature",
              "energy",
              "latency",
@@ -39,14 +40,15 @@ class AcceleratorMetricLogger(MetricLogger):
             scheduled_dnns[entry.bin.precision] += 1
         return ";".join(f"{k}:{v}" for k, v in sorted(scheduled_dnns.items()))
 
-    def log(self, *, iteration, is_improved, sim_temperature, energy, latency, edp, penalty, area, scheduled: Schedule,
+    def log(self, *, iteration, is_improved, is_accepted, sim_temperature, energy, latency, edp, penalty, area, scheduled: Schedule,
             penalty_details: Penalty, evaluation_result: EvaluationResult):
         self._check_closed()
         self._write_row([
             iteration,
             self._format_bool(is_improved),
-            self._format_float(sim_temperature),
-            self._format_float(energy),
+            self._format_bool(is_accepted),
+            self._format_sci_notation(sim_temperature),
+            self._format_sci_notation(energy),
             latency,
             self._format_sci_notation(edp),
             self._format_sci_notation(penalty),

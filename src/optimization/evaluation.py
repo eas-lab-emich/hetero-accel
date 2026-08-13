@@ -13,7 +13,8 @@ Penalty = namedtuple('Penalty',
 class SchedulePenalizer:
 
     def __init__(self, accuracy_lut):
-        self.lambda_p1 = 0.02 * 1e17
+        # self.lambda_p1 = 0.015 * 1e17
+        self.lambda_p1 = 0.015 * 1e17
         self.lambda_p2 = 0.02 * 1e17
         self.lambda_p3 = 0.3 * 1e17
         self.window_size = 3
@@ -36,7 +37,14 @@ class SchedulePenalizer:
                        self.window_size, self.risk_threshold)
 
     def __compute_p1(self, schedule_history):
-        schedule = schedule_history[-1]
+        penalty = 0
+        for index, schedule in enumerate(schedule_history):
+            budget_remainder = self.__budget_remainder(schedule)
+            base_penalty = budget_remainder if budget_remainder > 10 else 0
+            penalty += np.exp(1.2*(index - len(schedule_history) + 1)) * base_penalty
+        return penalty
+
+    def __budget_remainder(self, schedule):
         min_accuracies = self.accuracy_lut.loc[
             self.accuracy_lut[self.accuracy_lut["Valid"] == 1].groupby("Network")["Accuracy"].idxmin()
         ].set_index("Network")["Accuracy"]
