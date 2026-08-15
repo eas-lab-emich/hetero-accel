@@ -13,8 +13,8 @@ Penalty = namedtuple('Penalty',
 class SchedulePenalizer:
 
     def __init__(self, accuracy_lut):
-        # self.lambda_p1 = 0.015 * 1e17
-        self.lambda_p1 = 0.015 * 1e17
+        self.lambda_p1 = 1.15e15
+        # self.lambda_p1 = 0
         self.lambda_p2 = 0.02 * 1e17
         self.lambda_p3 = 0.3 * 1e17
         self.window_size = 3

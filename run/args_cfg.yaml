@@ -4,7 +4,7 @@ app_args:
         output_dir: 'out_3_13'
         name: ours
         deterministic: True
-        global_seed: 0
+        global_seed: 121254
         dnn_accuracy_lut_file: /home/welby/workspace/hetero-accel/logs/complete_ours_2026.04.01/lut.csv
         scheduler_type: ours
         solver_type: mthggreedyregret

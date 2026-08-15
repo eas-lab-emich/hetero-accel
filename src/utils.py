@@ -162,7 +162,7 @@ def set_deterministic(seed):
     """Try to configure the system for reproducible results.
        Seed the PRNG for the CPU, Cuda, numpy and Python
     """
-    logger.debug('Deterministic configuration was invoked')
+    logger.info('Deterministic configuration was invoked')
     if seed is None:
         seed = 123
     torch.manual_seed(seed)
@@ -171,6 +171,7 @@ def set_deterministic(seed):
 
     torch.backends.cudnn.deterministic = True
     torch.backends.cudnn.benchmark = True
+    logger.info(f'Set seed to {seed}')
 
 
 def load_checkpoint(model, chkpt_path=None, model_device='cuda', to_cpu=False, strict=False, verbose=True):
