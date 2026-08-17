@@ -8,6 +8,7 @@ class SubacceleratorParamsLogger(MetricLogger):
         self._write_row(
             ["step",
              "is_improved",
+             "is_accepted",
              "precision",
              "pe_array_x",
              "pe_array_y",
@@ -17,12 +18,13 @@ class SubacceleratorParamsLogger(MetricLogger):
              "psum_spad_size",
              "evaluation_result"])
 
-    def log(self, *, iteration, is_improved, precision, pe_array_x, pe_array_y,
+    def log(self, *, iteration, is_improved, is_accepted, precision, pe_array_x, pe_array_y,
             sram_size, ifmap_spad_size, weights_spad_size, psum_spad_size, evaluation_result: EvaluationResult):
         self._check_closed()
         self._write_row([
             iteration,
             self._format_bool(is_improved),
+            self._format_bool(is_accepted),
             precision,
             pe_array_x,
             pe_array_y,

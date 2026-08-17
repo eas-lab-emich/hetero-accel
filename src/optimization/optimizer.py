@@ -10,16 +10,16 @@ from types import SimpleNamespace
 from collections import OrderedDict
 from time import time
 from shutil import copy
+
 from simanneal import Annealer
 
 from src.evaluation_result import EvaluationResult
 from src.logging.subaccelerator_params_logger import SubacceleratorParamsLogger
 from src.logging.accelerator_metric_logger import AcceleratorMetricLogger
 from src.mapping.api import AcceleratorConfiguration, MappingRequest
-from src.mapping.impl.async_timeloop import AsyncTimeloopMapper
 from src.mapping.impl.distributed_timeloop import DistributedTimeloopMapper
 
-from src.optimization.evaluation import SchedulePenalizer
+from src.optimization.evaluation import SchedulePenalizer, StepResult
 from src.optimization.scheduling import SolverType, Scheduler
 from src.utils import get_contents_table
 
@@ -34,51 +34,38 @@ class DesignSpace(SimpleNamespace):
 
     def __init__(self, accelerator_state_class, **kwargs):
         super().__init__(**kwargs)
-        self._fields = list(self.__dict__.keys())
+        self._fields = ['pe_array_x',
+                        'pe_array_y',
+                        'sram_size',
+                        'ifmap_spad_size',
+                        'weights_spad_size',
+                        'psum_spad_size']
         self.accelerator_state_class = accelerator_state_class
         for key, value in kwargs.items():
             assert key in accelerator_state_class._fields, f'{key}'
             assert isinstance(value, (list, tuple)) and len(value) > 0
 
-    # def __setattr__(self, key, val):
-    #     """Emulating the functionality of a namedtuple"""
-    #     raise AttributeError('Cannot set new values for DesignSpace')
+    def neighborhood_move(self, accelerator):
+        fields_to_change = random.sample(self._fields, k=2)
+        accel_dict = accelerator._asdict()
+        for field_name in fields_to_change:
+            param_val = accel_dict[field_name]
+            possible_vals = getattr(self, field_name)
+            current_val_idx = possible_vals.index(param_val)
+            if current_val_idx == 0:
+                idx = 1
+            elif current_val_idx == len(possible_vals) - 1:
+                idx = current_val_idx - 1
+            else:
+                idx = current_val_idx + random.choice([-1, 1])
+            accel_dict[field_name] = possible_vals[idx]
 
-    def sample(self, override_dict=None):
-        """Get a random sample from the design space. A semi-random sample
-           can be obtained be setting specific values to the override dict
-        """
-        override_dict = {} if override_dict is None else override_dict
-        values = {
-            field: random.choice(getattr(self, field))
-            if field not in override_dict else override_dict[field]
-            for field in self._fields
-        }
-        # return super().__class__(**values)
-        return self.accelerator_state_class(**values)
-
-    def extract(self, *args, **kwargs):
-        """Extract a specific solution from the design space
-        """
-        assert len(args) == 0 or len(kwargs) == 0, "Only one type of input is supported"
-        if len(args) > 0:
-            values_to_get = args[0] if isinstance(args[0], list) and len(args) == 1 else args
-        elif len(kwargs) > 0:
-            values_to_get = [kwargs[field] for field in self._fields]
-        else:
-            raise ValueError("No inputs were given")
-
-        for value, field in zip(values_to_get, self._fields):
-            assert value in getattr(self, field), f"Invalid value {value} for {field}"
-
-        return self.accelerator_state_class(*values_to_get)
+        return self.accelerator_state_class(**accel_dict)
 
 
 class AcceleratorOptimizer(Annealer):
     """
     Implementation of the annealing optimizer for heterogeneous accelerators.
-
-
     """
 
     def __init__(self,
@@ -102,7 +89,7 @@ class AcceleratorOptimizer(Annealer):
         self.area_dict = OrderedDict()
         self.step = 0
         self.state = None
-        self.evaluated_state = None
+        self.under_eval_state : list | None = None
         self.latest_energy = self.latest_penalty = self.latest_latency = self.latest_edp = self.latest_area = self.latest_evaluation_result = None
         self.solver_type = SolverType.MTHGGreedyRegret
         self.logdir = logdir
@@ -120,18 +107,11 @@ class AcceleratorOptimizer(Annealer):
         self.schedule_penalizer = SchedulePenalizer(self.accuracy_lut)
 
         initial_state = self.get_initial_state()
-        super().__init__(initial_state, getattr(args, 'simanneal_load_state', None))
+        super().__init__(initial_state)
         assert self.state == initial_state
 
-        # load previous evaluations
-        self.loaded_state = None
-        if getattr(args, 'load_state_from', None) is not None and \
-                os.path.exists(args.load_state_from):
-            # later, use the loaded state as the first move of the annealing procedure
-            self.loaded_state = self.load_state(args.load_state_from)
-        self.best_state = self.copy_state(self.loaded_state)
-
         # get baseline measurements
+        self.under_eval_state = self.state
         initial_metric = self.energy(initial=True)
         self.initial_metric = initial_metric
         self.initial_energy = self.latest_energy
@@ -146,8 +126,6 @@ class AcceleratorOptimizer(Annealer):
 
         # setup scheduling parameters during annealing
         self.copy_strategy = 'deepcopy'
-        self.state_delta = args.simanneal_state_delta
-        self.state_delta = 1 if self.state_delta is None else self.state_delta
         if args is None or \
                 getattr(args, 'simanneal_auto_schedule', False) or \
                 any(getattr(args, arg, None) is None
@@ -168,41 +146,22 @@ class AcceleratorOptimizer(Annealer):
 
     def get_initial_state(self):
         """Configure the initial state of the optimizer, w.r.t. the
-           selected heterogeneity of he accelerator
+           selected heterogeneity of the accelerator
         """
         initial_state = []
         # build a heterogeneous accelerator, with specific precision for each accelerator
         for accelerator_idx in range(self.num_accelerators):
-            precision = self.accelerator_cfg.design_space['precision'][accelerator_idx]
-            values = [
-                precision if 'precision' in field.lower() else getattr(self.accelerator_cfg, field)
-                for field in self.design_space._fields
-            ]
-            initial_state.append(self.design_space.extract(*values))
+            values = {
+                field: getattr(self.accelerator_cfg, field) for field in self.design_space._fields
+            }
+            values['precision'] = self.accelerator_cfg.design_space['precision'][accelerator_idx]
+            initial_state.append(self.design_space.accelerator_state_class(**values))
 
         logger.info("=> Initial state:")
         for state in initial_state:
             logger.info(f"\t{state}")
         return initial_state
 
-    def load_state(self, load_from, save_state_to=None):
-        """Load the state and its results from a given file
-        """
-        with open(load_from, 'rb') as f:
-            state_dict = pickle.load(f)
-        logger.info(f"Loaded initial state from checkpoint ({load_from})")
-        logger.info(f"Checkpoint contents:\n{get_contents_table(state_dict)}\n")
-        save_state_to = save_state_to or os.path.join(self.logdir, 'state.sa.pkl')
-        copy(load_from, save_state_to)
-
-        self.energy_dict.update(state_dict.get('energy', {}))
-        self.latency_dict.update(state_dict.get('latency', {}))
-        self.edp_dict.update(state_dict.get('edp', {}))
-        self.area_dict.update(state_dict.get('area', {}))
-        if getattr(self, 'hw_constraints', None) is None:
-            self.hw_constraints = state_dict.get('constraints', None)
-        self.latest_schedule = state_dict.get('schedule', None)
-        return state_dict.get('state', None)
 
     def set_state(self, state):
         """Set a given state
@@ -211,32 +170,11 @@ class AcceleratorOptimizer(Annealer):
         self.latest_energy = self.latest_latency = self.latest_edp = self.latest_area = None
         self.latest_schedule = None
 
-    def save_state(self, save_state_to=None, state_to_save=None):
-        """Save the state and results from fitness calculation
-        """
-        state_dict = {'energy': self.energy_dict,
-                      'latency': self.latency_dict,
-                      'edp': self.edp_dict,
-                      'area': self.area_dict,
-                      'schedule': self.latest_schedule,
-                      'state': self.state if state_to_save is None else state_to_save,
-                      'constraints': getattr(self, 'hw_constraints', None),
-                      'latest_energy': self.latest_energy,
-                      'latest_latency': self.latest_latency,
-                      'latest_edp': self.latest_edp,
-                      'latest_area': self.latest_area}
-
-        save_state_to = save_state_to or os.path.join(self.logdir, 'state.sa.pkl')
-        with open(save_state_to, 'wb') as f:
-            pickle.dump(state_dict, f)
-        logger.info(f"Saved state in: {save_state_to}")
 
     def run(self):
         """Run Simulated Annealing
         """
         self.anneal()
-        # save the best state
-        self.save_state(os.path.join(self.logdir, 'best_state.sa.pkl'))
 
     def update(self, step, T, E, acceptance, improvement):
         """Internal update for the status of the simulated annealing
@@ -258,6 +196,10 @@ class AcceleratorOptimizer(Annealer):
 
         evaluation_result = self.latest_evaluation_result if self.latest_evaluation_result else EvaluationResult.UNKNOWN
 
+        self.schedule_penalizer.ingest_results(
+            StepResult(edp=self.latest_edp, penalty=self.latest_penalty, accepted=acceptance, improved=improvement,
+                       schedule=self.latest_schedule, evaluation_result=evaluation_result))
+
         self.accelerator_metric_logger.log(
             iteration=self.step,
             is_improved=improvement,
@@ -272,11 +214,11 @@ class AcceleratorOptimizer(Annealer):
             penalty_details=self.latest_penalty_details,
             evaluation_result=evaluation_result
         )
-        state = self.evaluated_state if self.evaluated_state else self.state
-        for accl in state:
+        for accl in self.under_eval_state or []:
             self.subaccelerator_params_logger.log(
                 iteration=self.step,
                 is_improved=improvement,
+                is_accepted=acceptance,
                 pe_array_x=accl.pe_array_x,
                 pe_array_y=accl.pe_array_y,
                 precision=accl.precision,
@@ -286,59 +228,27 @@ class AcceleratorOptimizer(Annealer):
                 psum_spad_size=accl.psum_spad_size,
                 evaluation_result=evaluation_result
             )
+        self.under_eval_state = None
 
     def move(self):
         """Alter the current state
         """
         self.step += 1
-        # If this is the first evaluation, use the loaded state as the first move of the annealing procedure
-        if self.step == 1 and getattr(self, 'loaded_state', None) is not None:
-            new_state = self.loaded_state
-        # Otherwise, generate a semi-random accelerator with static precision
-        # NOTE: This works for accelerators with the attribute 'precision'
-        else:
-            new_state = self.state
+        # randomly step in the design space for the given accelerator
+        self.under_eval_state = self.state = [self.design_space.neighborhood_move(accelerator)
+                                 for accelerator in self.state]
 
-            # change only a number of features from the previous state, according to delta
-            fields_to_change = random.choices(self.design_space._fields,
-                                              k=math.ceil(self.state_delta * len(self.design_space._fields)))
-
-            # make sure the new state is different
-            while new_state == self.state:
-                new_state = []
-                for accelerator_idx in range(self.num_accelerators):
-                    # generate a random architecture from the design space
-                    new_accelerator = self.design_space.sample(
-                        override_dict={'precision': self.accelerator_cfg.design_space['precision'][accelerator_idx]}
-                    )
-                    # set the accelerator values as a combination from the new and old ones (previous state)
-                    values = [
-                        getattr(new_accelerator, field) if field in fields_to_change
-                        else getattr(self.state[accelerator_idx], field)
-                        for field in self.design_space._fields
-                    ]
-                    new_accelerator = self.design_space.extract(*values)
-                    new_state.append(new_accelerator)
-
-        self.state = self.evaluated_state = new_state
         logger.info(f"=> Move #{int(self.step)} taken. New state:")
-        for state in new_state:
+        for state in self.under_eval_state:
             logger.info(f"\t{state}")
 
-    def energy(self, initial=False, save_best=True):
+    def energy(self, initial=False):
         """Wrapper function for estimating the SA energy metric
         """
         start = time()
         logger.info(f"=> Beginning {'initial ' if initial else ''}state evaluation")
         self.latest_evaluation_result = self._evaluation()
         logger.info(f"Completed state evaluation in {time() - start:.3e}s")
-
-        # save the results
-        self.save_state()
-        if save_best:
-            # save the best state
-            self.save_state(save_state_to=os.path.join(self.logdir, 'best_state.sa.pkl'),
-                            state_to_save=self.best_state)
 
         if self.latest_schedule is not None:
             logger.info(f"Evaluation results:\n"
@@ -394,7 +304,7 @@ class AcceleratorOptimizer(Annealer):
         edp_dict = {}
 
         deferred_mappings = {}
-        for accelerator, (dnn_name, layers) in itertools.product(self.state, self.workload.items()):
+        for accelerator, (dnn_name, layers) in itertools.product(self.under_eval_state, self.workload.items()):
             logger.info(f"\t\tQueuing evaluation on accelerator={accelerator}, dnn={dnn_name}")
 
             # check if this evaluation was executed before
@@ -476,7 +386,7 @@ class AcceleratorOptimizer(Annealer):
 
         logger.info("Completed mapping evaluation")
 
-        self.latest_area = sum([self.area_dict[accelerator] for accelerator in self.state])
+        self.latest_area = sum([self.area_dict[accelerator] for accelerator in self.under_eval_state])
         # check the area constraint #TODO do we keep this long term or remove? It's a completely different objective...
         # if violated_area_constraint(self.latest_area):
         #     self.latest_schedule = self.latest_energy = self.latest_latency = self.latest_edp = None
@@ -487,11 +397,10 @@ class AcceleratorOptimizer(Annealer):
         start = time()
         # TODO: Consider the metrics used for weight_dict and cost_dict
         schedule = self.scheduler.run(items=list(self.workload.keys()),
-                                      bins=self.state,
+                                      bins=self.under_eval_state,
                                       cost_dict=self.energy_dict,
                                       weight_dict=self.latency_dict,
                                       solver_type=self.solver_type)
-        # save schedule of latest move
         self.latest_schedule = schedule
         logger.debug(f"Schedule created in {time() - start:.3e}s")
 

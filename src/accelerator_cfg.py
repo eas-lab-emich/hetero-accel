@@ -69,7 +69,7 @@ class AcceleratorProfile:
             ifmap_spad_size_options = [8, 12, 16, 24, 32, 40, 48, 64]
             weights_spad_size_options = [256, 320, 384, 448, 512, 576, 640]
             psum_spad_size_options = [16, 24, 32, 40, 48, 64, 80, 96]
-            sram_size_options = [45000, 60000, 800000, 108000, 120000, 140000, 180000]
+            sram_size_options = [45000, 60000, 80000, 108000, 120000, 140000, 180000]
             precision_options = [8, 16, 32]
 
             # prepare dictionary with design space parameters, according to the self.state class

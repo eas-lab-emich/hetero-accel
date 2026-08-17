@@ -1,13 +1,24 @@
 from collections import namedtuple
+from typing import NamedTuple
 
 import numpy as np
 import pandas as pd
 
+from src.evaluation_result import EvaluationResult
 from src.optimization.scheduling import Schedule
 
 Penalty = namedtuple('Penalty',
                      ['total_penalty', 'aggregate_accuracy_loss',
                       'p1', 'p2', 'p3', 'lambda_1', 'lambda_2', 'lambda_3', 'window', 'risk_threshold'])
+
+
+class StepResult(NamedTuple):
+    edp: float
+    penalty: float
+    accepted: bool
+    improved: bool
+    schedule: Schedule
+    evaluation_result: EvaluationResult
 
 
 class SchedulePenalizer:
@@ -19,29 +30,33 @@ class SchedulePenalizer:
         self.lambda_p3 = 0.3 * 1e17
         self.window_size = 3
         self.accuracy_lut = accuracy_lut
-        self.schedule_history = []
+        self.step_results = []
         self.baseline_precision = 8
         self.risk_threshold = 8
 
-    def penalize(self, schedule: Schedule) -> Penalty:
-        self.schedule_history.append(schedule)
-        p1 = self.__compute_p1(self.schedule_history)
+    def penalize(self, latest_schedule: Schedule) -> Penalty:
+        p1 = self.__compute_p1(latest_schedule)
         # p2 = self.__compute_p2(self.schedule_history)
         # p3 = self.__compute_p3(self.schedule_history)
         p2 = 0
         p3 = 0
         total_penalty = (self.lambda_p1 * p1 + self.lambda_p2 * p2 + self.lambda_p3 * p3)
-        return Penalty(total_penalty, self.__aggregate_loss(schedule),
+        return Penalty(total_penalty, self.__aggregate_loss(latest_schedule),
                        p1, p2, p3,
                        self.lambda_p1, self.lambda_p2, self.lambda_p3,
                        self.window_size, self.risk_threshold)
 
-    def __compute_p1(self, schedule_history):
+    def ingest_results(self, step_results: StepResult):
+        self.step_results.append(step_results)
+
+    def __compute_p1(self, latest_schedule):
+        eligible_schedules = [result.schedule for result in self.step_results if result.accepted]
+        eligible_schedules.append(latest_schedule)
         penalty = 0
-        for index, schedule in enumerate(schedule_history):
+        for index, schedule in enumerate(eligible_schedules):
             budget_remainder = self.__budget_remainder(schedule)
             base_penalty = budget_remainder if budget_remainder > 10 else 0
-            penalty += np.exp(1.2*(index - len(schedule_history) + 1)) * base_penalty
+            penalty += np.exp(1.2 * (index - len(eligible_schedules) + 1)) * base_penalty
         return penalty
 
     def __budget_remainder(self, schedule):

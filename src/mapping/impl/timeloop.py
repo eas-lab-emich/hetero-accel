@@ -639,7 +639,7 @@ class TimeloopMapper:
         self.params.num_threads = tl_thread_count
         self.params.timeout = 15000
         self.params.victory_condition = 500
-        self.params.algorithm = 'random-pruned'
+        self.params.algorithm = 'Hybrid'
         self.params.max_permutations_per_if_visit = 16
 
     def _get_config(self):
