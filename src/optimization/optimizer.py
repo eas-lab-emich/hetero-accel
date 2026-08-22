@@ -1,27 +1,22 @@
 import itertools
 import logging
 import random
-import os.path
 import math
-import pickle
 import uuid
 from concurrent.futures import as_completed
 from types import SimpleNamespace
 from collections import OrderedDict
 from time import time
-from shutil import copy
 
 from simanneal import Annealer
 
 from src.evaluation_result import EvaluationResult
 from src.logging.subaccelerator_params_logger import SubacceleratorParamsLogger
 from src.logging.accelerator_metric_logger import AcceleratorMetricLogger
-from src.mapping.api import AcceleratorConfiguration, MappingRequest
-from src.mapping.impl.distributed_timeloop import DistributedTimeloopMapper
+from src.mapping.api import AcceleratorConfiguration, MappingRequest, async_mapper
 
 from src.optimization.evaluation import SchedulePenalizer, StepResult
 from src.optimization.scheduling import SolverType, Scheduler
-from src.utils import get_contents_table
 
 __all__ = ['DesignSpace', 'AcceleratorOptimizer']
 
@@ -99,8 +94,7 @@ class AcceleratorOptimizer(Annealer):
                                         **accelerator_cfg.design_space)
 
         # initialize timeloop
-        # self.accelerator_mapper = AsyncTimeloopMapper(os.path.join(self.logdir, 'mapper_workspace'))
-        self.accelerator_mapper = DistributedTimeloopMapper()
+        self.accelerator_mapper = async_mapper(self.logdir)
         self.accelerator_mapper.start()
         # initialize scheduler
         self.scheduler = Scheduler(args.scheduler_type)

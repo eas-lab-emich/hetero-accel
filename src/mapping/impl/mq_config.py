@@ -12,12 +12,16 @@ class MQConfig(NamedTuple):
     host: str
 
 
+class MQError(RuntimeError):
+    pass
+
+
 def get_mq_config() -> MQConfig:
     username = os.environ.get(USERNAME_ENV)
     password = os.environ.get(PASSWORD_ENV)
     host = os.environ.get(HOST_ENV)
 
     if not (username and password and host):
-        raise RuntimeError(f"{USERNAME_ENV}, {PASSWORD_ENV}, and {HOST_ENV} must be set as env variables")
+        raise MQError(f"{USERNAME_ENV}, {PASSWORD_ENV}, and {HOST_ENV} must be set as env variables")
 
     return MQConfig(username=username, password=password, host=host)

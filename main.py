@@ -380,10 +380,10 @@ def accelerator_exploration(args, workload, accuracy_lut):
     for state in optimizer.best_state:
         logger.info(f'\t{state}')
 
-    # get the scheduling evaluation from the best accelerator state
-    optimizer.set_state(optimizer.best_state)
-    logger.info(f"Final scheduling:")
-    optimizer.energy(initial=False, save_best=False)
+    # # get the scheduling evaluation from the best accelerator state
+    # optimizer.set_state(optimizer.best_state)
+    # logger.info(f"Final scheduling:")
+    # optimizer.energy(initial=False)
 
     logger.info("*------------------*")
     optimizer.close()

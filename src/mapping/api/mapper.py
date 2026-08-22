@@ -2,10 +2,11 @@ from abc import ABC
 from concurrent.futures import Future
 from uuid import UUID
 
-from pydantic import BaseModel
+from pydantic import BaseModel, ConfigDict
 
 
 class AcceleratorConfiguration(BaseModel):
+    model_config = ConfigDict(frozen=True)
     pe_array_x: int
     pe_array_y: int
     precision: int
@@ -16,6 +17,7 @@ class AcceleratorConfiguration(BaseModel):
 
 
 class ConvolutionProblem(BaseModel):
+    model_config = ConfigDict(frozen=True)
     input_channels: int  # C
     output_channels: int  # K/M
     input_width: int
