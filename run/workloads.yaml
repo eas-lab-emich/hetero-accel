@@ -3,14 +3,6 @@
 # and the MLPerf suite: https://github.com/mlcommons/inference
 
 workloads:
-#  Test:
-#    - arch: tinyyolov2
-#      dataset: coco
-#      pretrained: true
-#      resumed_checkpoint_path: null
-#      batch_print_frequency: 5
-#      batch_size: 1
-#
   ClassifiersA:
     - arch: vgg11
       dataset: cifar10
@@ -74,78 +66,3 @@ workloads:
       pretrained: true
       resumed_checkpoint_path: null
       batch_print_frequency: 100
-
-#
-## same as ClassifiersA but without efficientnet and vgg16 on cifar10
-#  ClassifiersC:
-#    - arch: vgg11
-#      dataset: cifar10
-#      pretrained: true
-#      resumed_checkpoint_path: null
-#      batch_print_frequency: 100
-#    - arch: resnet18
-#      dataset: cifar10
-#      pretrained: true
-#      resumed_checkpoint_path: null
-#      batch_print_frequency: 100
-#    - arch: vgg16
-#      dataset: cifar10
-#      pretrained: true
-#      resumed_checkpoint_path: null
-#      batch_print_frequency: 100
-#    - arch: resnet50
-#      dataset: cifar100
-#      pretrained: true
-#      resumed_checkpoint_path: null
-#      batch_print_frequency: 100
-#    - arch: mobilenetv2
-#      dataset: cifar100
-#      pretrained: true
-#      resumed_checkpoint_path: null
-#      batch_print_frequency: 100
-#    - arch: inception_v3
-#      dataset: imagenet
-#      pretrained: true
-#      resumed_checkpoint_path: null
-#      batch_print_frequency: 100
-#
-  Mixed:
-#    - arch: resnet50
-#      dataset: imagenet
-#      pretrained: true
-#      resumed_checkpoint_path: null
-#      batch_print_frequency: 100
-#    - arch: resnet18
-#      dataset: cifar10
-#      pretrained: false
-#      resumed_checkpoint_path: null
-#      batch_print_frequency: 100
-#    - arch: vgg16
-#      dataset: cifar100
-#      pretrained: true
-#      resumed_checkpoint_path: null
-#      batch_print_frequency: 100
-#    - arch: deeplabv3_resnet50
-#      dataset: voc_seg
-#      pretrained: true
-#      batch_size: 1
-#      resumed_checkpoint_path: null
-#      batch_print_frequency: 100
-#    - arch: fcn_resnet101
-#      dataset: voc_seg
-#      pretrained: true
-#      batch_size: 1
-#      resumed_checkpoint_path: null
-#      batch_print_frequency: 100
-#    - arch: fasterrcnn_resnet50_fpn
-#      dataset: coco
-#      pretrained: true
-#      batch_size: 1
-#      resumed_checkpoint_path: null
-#      batch_print_frequency: 200
-#    - arch: fasterrcnn_mobilenet_v3_large_320_fpn
-#      dataset: coco
-#      pretrained: true
-#      batch_size: 1
-#      resumed_checkpoint_path: null
-#      batch_print_frequency: 200

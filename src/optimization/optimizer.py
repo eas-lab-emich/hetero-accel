@@ -8,12 +8,12 @@ from types import SimpleNamespace
 from collections import OrderedDict
 from time import time
 
-from simanneal import Annealer
 
 from src.evaluation_result import EvaluationResult
 from src.logging.subaccelerator_params_logger import SubacceleratorParamsLogger
 from src.logging.accelerator_metric_logger import AcceleratorMetricLogger
 from src.mapping.api import AcceleratorConfiguration, MappingRequest, async_mapper
+from src.optimization.anneal import Annealer
 
 from src.optimization.evaluation import SchedulePenalizer, StepResult
 from src.optimization.scheduling import SolverType, Scheduler
@@ -300,17 +300,6 @@ class AcceleratorOptimizer(Annealer):
         deferred_mappings = {}
         for accelerator, (dnn_name, layers) in itertools.product(self.under_eval_state, self.workload.items()):
             logger.info(f"\t\tQueuing evaluation on accelerator={accelerator}, dnn={dnn_name}")
-
-            # check if this evaluation was executed before
-            if (dnn_name, accelerator) in self.energy_dict:
-                # NOTE: This is not as accurate as accumulate layer-wise EDP results,
-                #       but it is a good approximation for not re-running the simulation
-                if (dnn_name, accelerator) not in self.edp_dict:
-                    self.edp_dict[(dnn_name, accelerator)] = self.energy_dict[(dnn_name, accelerator)] * \
-                                                             self.latency_dict[
-                                                                 (dnn_name, accelerator)]
-                logger.info(f"\t\tSkipping evaluation: already estimated")
-                continue
 
             # check accuracy constraint
             if violated_accuracy_constraint(dnn_name, accelerator.precision):

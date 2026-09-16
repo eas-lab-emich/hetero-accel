@@ -4,13 +4,12 @@ app_args:
         output_dir: 'out_3_13'
         name: ours
         deterministic: True
-        global_seed: 52911916
-        dnn_accuracy_lut_file: /home/welby/workspace/hetero-accel/logs/complete_ours_2026.04.01/lut.csv
+        global_seed: 121254
+#        dnn_accuracy_lut_file: /home/welby/workspace/hetero-accel/logs/complete_ours_2026.04.01/lut.csv
+        dnn_accuracy_lut_file: /home/welby/workspace/hetero-accel/workloads/lut_b.csv
         scheduler_type: ours
         solver_type: mthggreedyregret
-#        load_state_from: data/mixed/eyeriss/tight_constraint/best_state.sa.pkl
         skip_exploration: False
-#        load_pruned_mappings_from: data/mixed/eyeriss/tight_constraint/pruned_mappings.pkl
 
 dnn_op_mode_args:
         evaluate_model_mode: False
@@ -20,12 +19,12 @@ dnn_op_mode_args:
         model_summary_mode: null
 
 workload_args:
-        workload_idx: ClassifiersA
+        workload_idx: ClassifiersB
         workers: 16
         batch_size: 32
         load_serialized: False
         gpus: 0
-        cpu: True
+        cpu: False
         validation_split: 0.0
         effective_train_size: 0.5
         effective_valid_size: 0.5

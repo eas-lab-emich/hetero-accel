@@ -92,7 +92,7 @@ class CachedAsyncMapperFacade(AsyncAcceleratorMapper):
                 if self.flush_pending:
                     self._flush()
                     self.flush_pending = False
-            time.sleep(.5)
+            time.sleep(60)
 
     def _flush(self):
         to_flush = {}

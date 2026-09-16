@@ -24,10 +24,12 @@ class StepResult(NamedTuple):
 class SchedulePenalizer:
 
     def __init__(self, accuracy_lut):
-        # self.lambda_p1 = 1.15e15
         self.lambda_p1 = 0
-        self.lambda_p2 = 0.02 * 1e17
-        self.lambda_p3 = 0.3 * 1e17
+        # self.lambda_p1 = 0
+        # self.lambda_p2 = 0.02 * 1e17
+        self.lambda_p2 = 0
+        self.lambda_p3 = 0
+        # self.lambda_p3 = 0
         self.window_size = 3
         self.accuracy_lut = accuracy_lut
         self.step_results = []
@@ -37,9 +39,8 @@ class SchedulePenalizer:
     def penalize(self, latest_schedule: Schedule) -> Penalty:
         p1 = self.__compute_p1(latest_schedule)
         # p2 = self.__compute_p2(self.schedule_history)
-        # p3 = self.__compute_p3(self.schedule_history)
         p2 = 0
-        p3 = 0
+        p3 = self.__compute_p3(latest_schedule)
         total_penalty = (self.lambda_p1 * p1 + self.lambda_p2 * p2 + self.lambda_p3 * p3)
         return Penalty(total_penalty, self.__aggregate_loss(latest_schedule),
                        p1, p2, p3,
@@ -94,19 +95,28 @@ class SchedulePenalizer:
     def __bad(self, schedule):
         return self.__aggregate_loss(schedule) > self.risk_threshold
 
-    def __compute_p3(self, schedule_history):
+    def __compute_p3(self, latest_schedule):
         c = 1
-        enforced_precision = 8
-        window = self.window_size
-        if len(schedule_history) < window:
-            return 0
-        lookback = schedule_history[-window:]
-        for s in lookback:
-            if not s or not s.assigned:
-                continue
-            for a in s.assigned.values():
-                if a.precision == enforced_precision:
-                    return 0
+        enforced_precisions = 6, 7, 8
+        assigned_precisions = [a.precision for a in latest_schedule.assigned.values()]
+        for p in enforced_precisions:
+            if not p in assigned_precisions:
+                return c
+        return 0
+
+        # schedule_history = [result.schedule for result in self.step_results if result.accepted]
+        # schedule_history.append(latest_schedule)
+        # c = 1
+        # window = self.window_size
+        # if len(schedule_history) < window:
+        #     return 0
+        # lookback = schedule_history[-window:]
+        # for s in lookback:
+        #     if not s or not s.assigned:
+        #         continue
+        #     for a in s.assigned.values():
+        #         if a.precision == enforced_precision:
+        #             return 0
         return c
 
     def __aggregate_loss(self, schedule):

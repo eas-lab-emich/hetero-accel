@@ -1,20 +1,21 @@
+import gc
 import logging
 import traceback
 import os.path
 import pickle
 import numpy as np
 import pandas as pd
+import torch
 import yaml
 from copy import deepcopy
 from types import SimpleNamespace
-from tabulate import tabulate
 from src import dataset_dirs
 from src.mapping.api import ConvolutionProblem
 from src.workload import MultiDNNWorkload
-from src.utils import env_cfg, handle_model_subapps
+from src.utils import env_cfg
 from src.args import OperationMode
 from src.net_wrapper import TorchNetworkWrapper
-from src.compression.compressor import PruningQuantizationCompressor
+from src.compression.compressor import Compressor
 from src.dataset import load_data
 from src.accelerator_cfg import AcceleratorProfile
 from src.optimization.optimizer import AcceleratorOptimizer
@@ -26,6 +27,7 @@ from src.other_heuristics import run_genetic_algorithm, run_random_search
 BASELINE_PRECISION = 8
 
 logger = logging.getLogger(__name__)
+
 
 def extract_problems(dnn_summary) -> list[ConvolutionProblem]:
     eligible_layer_types = ['conv2d', 'linear']
@@ -47,6 +49,7 @@ def extract_problems(dnn_summary) -> list[ConvolutionProblem]:
             ))
     return layers
 
+
 def main():
     """Main executing function, supporting the execution of either
        our optimization, or others for comparisons
@@ -61,7 +64,7 @@ def main():
     # initialize the workload
     workload = setup_workload(args)
     # create a LUT of quantization profiles for each DNN-precision pairing
-    dnn_accuracy_lut, compressors = quant_exploration(args, workload)
+    dnn_accuracy_lut = quant_exploration(args, workload)
 
     if args.operation_mode == OperationMode.Ours:
         # perform a DSE to define the sub-accelerator architectures
@@ -139,10 +142,6 @@ def setup_workload(args):
             net_wrapper.run_summary(
                 datasets[dnn_args.dataset][2])  # use the test dataset for exploring network geometry
 
-        # execute sub-applications
-        if handle_model_subapps(net_wrapper, data_loaders, args):
-            exit(0)
-
     return MultiDNNWorkload(dnns, datasets, print_frequency)
 
 
@@ -162,9 +161,9 @@ def init_compressor(args, workload, arch, net_wrapper):
                                        cpu=args.cpu,
                                        print_frequency=workload.print_frequency[arch],
                                        verbose=args.model_verbose)
-    return PruningQuantizationCompressor(compression_args,
-                                         workload.datasets[net_wrapper.dataset],
-                                         net_wrapper.model)
+    return Compressor(compression_args,
+                      workload.datasets[net_wrapper.dataset],
+                      net_wrapper.model)
 
 
 def quant_exploration(args, workload):
@@ -193,7 +192,6 @@ def quant_exploration(args, workload):
     else:
         df = pd.DataFrame(columns=columns)
 
-    compressors = {}
     for arch, net_wrapper in workload.dnns.items():
 
         # check if there is at least one accuracy constraint set
@@ -204,9 +202,8 @@ def quant_exploration(args, workload):
 
         if not skip_exploration:
             # initialize compressor
-            compressor = init_compressor(args, workload, arch, net_wrapper)
-            compressors[arch] = compressor
             logger.info(f'=> Beginning exhaustive exploration for {arch}')
+            compressor = init_compressor(args, workload, arch, net_wrapper)
             compressor.quantize(BASELINE_PRECISION)
 
             # compute accuracy statistics
@@ -218,7 +215,6 @@ def quant_exploration(args, workload):
             assert len(accuracy_stats) >= max_accuracy_metrics_recorded
 
             # compute the rest and group together
-            # model_stats, _ = compressor.compute_model_statistics()
             og_stats = {
                 'accuracy': accuracy_stats[0],
                 'sparsity': 0, 'size': 0,
@@ -231,6 +227,11 @@ def quant_exploration(args, workload):
             df.loc[len(df.index)] = ([arch, BASELINE_PRECISION,
                                       *accuracy_stats[:max_accuracy_metrics_recorded],
                                       0, 0, 1])
+            is_cuda = next(net_wrapper.model.parameters()).is_cuda
+            del compressor
+            gc.collect()
+            if is_cuda:
+                torch.cuda.empty_cache()
 
         else:
             og_stats = df.loc[(df['Network'] == arch) & (df['QuantBits'] == BASELINE_PRECISION)].iloc[0].to_dict()
@@ -253,9 +254,7 @@ def quant_exploration(args, workload):
 
             if not skip_exploration:
                 logger.info(f'{arch}: Testing quantization of {quant_bits} bits')
-                # reset the previous state of the network
-                compressor.reset()
-                # execute the compression profile
+                compressor = init_compressor(args, workload, arch, net_wrapper)
                 compressor.quantize(quant_bits)
                 # evaluate for accuracy and network statistics
                 accuracy_stats = compressor.validate() if args.use_validation_set else compressor.test(use_quant=True)
@@ -278,6 +277,11 @@ def quant_exploration(args, workload):
                 df.loc[len(df.index)] = ([arch, quant_bits,
                                           *accuracy_stats[:max_accuracy_metrics_recorded],
                                           0, 0, 0])
+                is_cuda = next(net_wrapper.model.parameters()).is_cuda
+                del compressor
+                gc.collect()
+                if is_cuda:
+                    torch.cuda.empty_cache()
 
             else:
                 stats = df.loc[(df['Network'] == arch) & (df['QuantBits'] == quant_bits)].iloc[0].to_dict()
@@ -311,7 +315,7 @@ def quant_exploration(args, workload):
     # save LUT to .csv file
     df.to_csv(os.path.join(args.logdir, 'lut.csv'))
 
-    return df, compressors
+    return df
 
 
 def accelerator_exploration(args, workload, accuracy_lut):
