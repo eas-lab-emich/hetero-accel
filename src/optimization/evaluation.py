@@ -24,7 +24,7 @@ class StepResult(NamedTuple):
 class SchedulePenalizer:
 
     def __init__(self, accuracy_lut):
-        self.lambda_p1 = 0
+        self.lambda_p1 = 1.15e15
         # self.lambda_p1 = 0
         # self.lambda_p2 = 0.02 * 1e17
         self.lambda_p2 = 0
@@ -40,7 +40,8 @@ class SchedulePenalizer:
         p1 = self.__compute_p1(latest_schedule)
         # p2 = self.__compute_p2(self.schedule_history)
         p2 = 0
-        p3 = self.__compute_p3(latest_schedule)
+        # p3 = self.__compute_p3(latest_schedule)
+        p3 = 0
         total_penalty = (self.lambda_p1 * p1 + self.lambda_p2 * p2 + self.lambda_p3 * p3)
         return Penalty(total_penalty, self.__aggregate_loss(latest_schedule),
                        p1, p2, p3,

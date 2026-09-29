@@ -127,7 +127,8 @@ class DistributedTimeloopMapper(AsyncAcceleratorMapper):
             self._results_connection.add_callback_threadsafe(
                 self._results_channel.stop_consuming
             )
-            self._consumer_thread.join()
+            self._consumer_thread.join(timeout=5)
+            print("Joined consumer thread")
 
         self._request_connection.close()
 

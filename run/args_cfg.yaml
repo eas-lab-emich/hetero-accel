@@ -4,9 +4,9 @@ app_args:
         output_dir: 'out_3_13'
         name: ours
         deterministic: True
-        global_seed: 121254
-#        dnn_accuracy_lut_file: /home/welby/workspace/hetero-accel/logs/complete_ours_2026.04.01/lut.csv
-        dnn_accuracy_lut_file: /home/welby/workspace/hetero-accel/workloads/lut_b.csv
+        global_seed: 115119111
+        dnn_accuracy_lut_file: /home/welby/workspace/hetero-accel/workloads/lut_a.csv
+#        dnn_accuracy_lut_file: /home/welby/workspace/hetero-accel/workloads/lut_b.csv
         scheduler_type: ours
         solver_type: mthggreedyregret
         skip_exploration: False
@@ -14,17 +14,17 @@ app_args:
 dnn_op_mode_args:
         evaluate_model_mode: False
         train_model_mode: False
-        test_timeloop_accelergy_mode: False
         test_pruning_quant_mode: False
         model_summary_mode: null
+        test_timeloop_accelergy_mode: False
 
 workload_args:
-        workload_idx: ClassifiersB
+        workload_idx: ClassifiersA
         workers: 16
         batch_size: 32
         load_serialized: False
         gpus: 0
-        cpu: False
+        cpu: True
         validation_split: 0.0
         effective_train_size: 0.5
         effective_valid_size: 0.5

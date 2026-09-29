@@ -4,10 +4,8 @@ import pickle
 import time
 from concurrent.futures import Future
 from pathlib import Path
-from threading import Lock, Thread
+from threading import Lock, Thread, Event
 from typing import Dict
-
-from torch._C import TupleType
 
 from src.mapping.api import AsyncAcceleratorMapper, MappingRequest, MappingStats, ConvolutionProblem, \
     AcceleratorConfiguration
@@ -38,6 +36,7 @@ class CachedAsyncMapperFacade(AsyncAcceleratorMapper):
         self.flush_pending = False
         self.flush_thread = None
         self.shutdown = False
+        self.wake = Event()
 
     def map(self, request: MappingRequest) -> Future[MappingStats]:
         with self.cache_lock:
@@ -78,21 +77,25 @@ class CachedAsyncMapperFacade(AsyncAcceleratorMapper):
         return self.wrapped.start()
 
     def stop(self):
-        self.wrapped.stop()
-        with self.cache_lock:
-            self.shutdown = True
-        self.flush_thread.join(timeout=5)
-        return
+        try:
+            self.wrapped.stop()
+        finally:
+            with self.cache_lock:
+                self.shutdown = True
+            self.wake.set()
+            self.flush_thread.join()
+            return
 
     def _scheduled_flush(self):
         shutdown = self.shutdown
         while not shutdown:
+            self.wake.wait(timeout=60)
+            self.wake.clear()
             with self.cache_lock:
                 shutdown = self.shutdown
                 if self.flush_pending:
                     self._flush()
                     self.flush_pending = False
-            time.sleep(60)
 
     def _flush(self):
         to_flush = {}

@@ -6,13 +6,13 @@ import pandas as pd
 
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
-RESULTS_ROOT = REPO_ROOT / "anneal_neighbor_results"
+RESULTS_ROOT = REPO_ROOT / "corrected_seed_pairs"
 ITERATIONS = range(126)
 
 
 def load_datasets(workload, results_root=RESULTS_ROOT):
     """Load accelerator metrics for every seed and optimization variant."""
-    workload_dir = Path(results_root) / f"results_neighbor_workload_{workload}"
+    workload_dir = Path(results_root) / f"workload_{workload}"
     datasets = {}
 
     for variant_dir in sorted(path for path in workload_dir.glob("*/*") if path.is_dir()):
