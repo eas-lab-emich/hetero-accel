@@ -20,4 +20,5 @@ def async_mapper(logdir) -> AsyncAcceleratorMapper:
     except MQError as mq_error:
         logger.warning("Unable to instantiate DistributedTimeloopMapper, using local compute only", exc_info=mq_error)
         mapper_impl = AsyncTimeloopMapper(os.path.join(logdir, 'mapper_workspace'))
+    # mapper_impl = AsyncTimeloopMapper(os.path.join(logdir, 'mapper_workspace'))
     return CachedAsyncMapperFacade(mapper_impl) if can_use_cache() else mapper_impl

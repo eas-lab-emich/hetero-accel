@@ -5,8 +5,8 @@ app_args:
         name: ours
         deterministic: True
         global_seed: 115119111
-        dnn_accuracy_lut_file: /home/welby/workspace/hetero-accel/workloads/lut_a.csv
-#        dnn_accuracy_lut_file: /home/welby/workspace/hetero-accel/workloads/lut_b.csv
+#        dnn_accuracy_lut_file: /home/welby/workspace/hetero-accel/workloads/lut_a.csv
+        dnn_accuracy_lut_file: /home/welby/workspace/hetero-accel/workloads/lut_b.csv
         scheduler_type: ours
         solver_type: mthggreedyregret
         skip_exploration: False
@@ -19,7 +19,7 @@ dnn_op_mode_args:
         test_timeloop_accelergy_mode: False
 
 workload_args:
-        workload_idx: ClassifiersA
+        workload_idx: ClassifiersB
         workers: 16
         batch_size: 32
         load_serialized: False

@@ -2,7 +2,10 @@ import logging
 import os.path
 import random
 import re
+import shutil
 import subprocess
+import uuid
+
 import numpy as np
 from collections import namedtuple, deque, OrderedDict
 from enum import Enum
@@ -262,7 +265,7 @@ class Scheduler:
 
         solver_dir = os.path.join(project_dir, 'generalizedassignmentsolver')
         logdir = logging.getLogger().logdir
-        resdir = os.path.join(logdir, 'scheduler_solver')
+        resdir = os.path.join(logdir, 'scheduler_solver', str(uuid.uuid4()))
         os.makedirs(resdir, exist_ok=True)
         infile = os.path.join(resdir, 'inputs')
         outfile = os.path.join(resdir, 'output')
@@ -297,6 +300,7 @@ class Scheduler:
             item = items[int(item_idx)]
             bin = bins[int(bin_idx)]
             schedule.add(item, bin, weight_dict[(item, bin)])
+        shutil.rmtree(resdir)
         return schedule
 
     def _run_random_scheduling(self, items, bins, cost_dict, weight_dict, **kwargs):

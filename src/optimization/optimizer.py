@@ -12,7 +12,7 @@ from time import time
 from src.evaluation_result import EvaluationResult
 from src.logging.subaccelerator_params_logger import SubacceleratorParamsLogger
 from src.logging.accelerator_metric_logger import AcceleratorMetricLogger
-from src.mapping.api import AcceleratorConfiguration, MappingRequest, async_mapper
+from src.mapping.api import AcceleratorConfiguration, MappingRequest, async_mapper, AsyncAcceleratorMapper
 from src.optimization.anneal import Annealer
 
 from src.optimization.evaluation import SchedulePenalizer, StepResult
@@ -70,7 +70,9 @@ class AcceleratorOptimizer(Annealer):
                  workload,
                  accuracy_lut,
                  hw_constraints,
-                 logdir
+                 logdir,
+                 *,
+                 accelerator_mapper: AsyncAcceleratorMapper
                  ):
         self.latest_penalty_details = None
         self.num_accelerators = num_accelerators
@@ -93,9 +95,7 @@ class AcceleratorOptimizer(Annealer):
         self.design_space = DesignSpace(accelerator_cfg.state,
                                         **accelerator_cfg.design_space)
 
-        # initialize timeloop
-        self.accelerator_mapper = async_mapper(self.logdir)
-        self.accelerator_mapper.start()
+        self.accelerator_mapper = accelerator_mapper
         # initialize scheduler
         self.scheduler = Scheduler(args.scheduler_type)
         self.schedule_penalizer = SchedulePenalizer(self.accuracy_lut)
@@ -136,7 +136,6 @@ class AcceleratorOptimizer(Annealer):
     def close(self):
         self.accelerator_metric_logger.close()
         self.subaccelerator_params_logger.close()
-        self.accelerator_mapper.stop()
 
     def get_initial_state(self):
         """Configure the initial state of the optimizer, w.r.t. the

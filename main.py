@@ -10,7 +10,7 @@ import yaml
 from copy import deepcopy
 from types import SimpleNamespace
 from src import dataset_dirs
-from src.mapping.api import ConvolutionProblem
+from src.mapping.api import ConvolutionProblem, async_mapper
 from src.workload import MultiDNNWorkload
 from src.utils import env_cfg
 from src.args import OperationMode
@@ -362,7 +362,9 @@ def accelerator_exploration(args, workload, accuracy_lut):
         dnn_name: extract_problems(dnn.summary) for dnn_name, dnn in workload.dnns.items()
     }
 
-    # initialize and run optimizer
+    accelerator_mapper = async_mapper(args.logdir)
+    accelerator_mapper.start()
+
     optimizer = AcceleratorOptimizer(args=args,
                                      num_accelerators=len(precision_options),
                                      accelerator_cfg=accel_cfg,
@@ -370,27 +372,25 @@ def accelerator_exploration(args, workload, accuracy_lut):
                                      accuracy_lut=accuracy_lut,
                                      hw_constraints=SimpleNamespace(deadline=args.deadline_constraint,
                                                                     area=args.area_constraint),
-                                     logdir=args.logdir
+                                     logdir=args.logdir,
+                                     accelerator_mapper=accelerator_mapper
                                      )
+    try:
+        if not args.skip_exploration:
+            optimizer.run()
 
-    if not args.skip_exploration:
-        optimizer.run()
+        logger.info("*------------------*")
+        comment = ''
+        if args.skip_exploration and getattr(args, 'load_state_from', None) is not None:
+            comment = f' (loaded from: {args.load_state_from}) '
+        logger.info(f"Final heterogeneous accelerator{comment}:")
+        for state in optimizer.best_state:
+            logger.info(f'\t{state}')
+        logger.info("*------------------*")
+    finally:
+        accelerator_mapper.stop()
+        optimizer.close()
 
-    logger.info("*------------------*")
-    comment = ''
-    if args.skip_exploration and getattr(args, 'load_state_from', None) is not None:
-        comment = f' (loaded from: {args.load_state_from}) '
-    logger.info(f"Final heterogeneous accelerator{comment}:")
-    for state in optimizer.best_state:
-        logger.info(f'\t{state}')
-
-    # # get the scheduling evaluation from the best accelerator state
-    # optimizer.set_state(optimizer.best_state)
-    # logger.info(f"Final scheduling:")
-    # optimizer.energy(initial=False)
-
-    logger.info("*------------------*")
-    optimizer.close()
 
 
 if __name__ == '__main__':
