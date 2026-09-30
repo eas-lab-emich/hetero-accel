@@ -50,7 +50,7 @@ class Annealer(object):
     best_energy = None
     start = None
 
-    def __init__(self, initial_state=None, load_state=None):
+    def __init__(self, initial_state=None, load_state=None, *, rng: random.Random):
         if initial_state is not None:
             self.state = self.copy_state(initial_state)
         elif load_state:
@@ -58,6 +58,7 @@ class Annealer(object):
         else:
             raise ValueError('No valid values supplied for neither \
             initial_state nor load_state')
+        self.rng = rng
 
         signal.signal(signal.SIGINT, self.set_user_exit)
 
@@ -201,9 +202,8 @@ class Annealer(object):
             else:
                 E += dE
             trials += 1
-            acceptance_draw = random.random()
+            acceptance_draw = self.rng.random()
             if dE > 0.0 and math.exp(-dE / T) < acceptance_draw:
-            # if dE > 0.0 and math.exp(-dE / T) < random.random():
                 # Restore previous state
                 self.state = self.copy_state(prevState)
                 E = prevEnergy
@@ -248,7 +248,8 @@ class Annealer(object):
                 self.move()
                 E = self.energy()
                 dE = E - prevEnergy
-                if dE > 0.0 and math.exp(-dE / T) < random.random():
+                acceptance_draw = self.rng.random()
+                if dE > 0.0 and math.exp(-dE / T) < acceptance_draw:
                     self.state = self.copy_state(prevState)
                     E = prevEnergy
                 else:

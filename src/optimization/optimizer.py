@@ -1,20 +1,18 @@
 import itertools
 import logging
-import random
 import math
+import random
 import uuid
-from concurrent.futures import as_completed
-from types import SimpleNamespace
 from collections import OrderedDict
+from concurrent.futures import as_completed
 from time import time
-
+from types import SimpleNamespace
 
 from src.evaluation_result import EvaluationResult
-from src.logging.subaccelerator_params_logger import SubacceleratorParamsLogger
 from src.logging.accelerator_metric_logger import AcceleratorMetricLogger
-from src.mapping.api import AcceleratorConfiguration, MappingRequest, async_mapper, AsyncAcceleratorMapper
+from src.logging.subaccelerator_params_logger import SubacceleratorParamsLogger
+from src.mapping.api import AcceleratorConfiguration, MappingRequest, AsyncAcceleratorMapper
 from src.optimization.anneal import Annealer
-
 from src.optimization.evaluation import SchedulePenalizer, StepResult
 from src.optimization.scheduling import SolverType, Scheduler
 
@@ -27,7 +25,7 @@ class DesignSpace(SimpleNamespace):
     """Wrapper for the design space of possible accelerator architectures
     """
 
-    def __init__(self, accelerator_state_class, **kwargs):
+    def __init__(self, accelerator_state_class, rng: random.Random, **kwargs):
         super().__init__(**kwargs)
         self._fields = ['pe_array_x',
                         'pe_array_y',
@@ -36,12 +34,14 @@ class DesignSpace(SimpleNamespace):
                         'weights_spad_size',
                         'psum_spad_size']
         self.accelerator_state_class = accelerator_state_class
+        self.rng = rng
+
         for key, value in kwargs.items():
             assert key in accelerator_state_class._fields, f'{key}'
             assert isinstance(value, (list, tuple)) and len(value) > 0
 
     def neighborhood_move(self, accelerator):
-        fields_to_change = random.sample(self._fields, k=2)
+        fields_to_change = self.rng.sample(self._fields, k=2)
         accel_dict = accelerator._asdict()
         for field_name in fields_to_change:
             param_val = accel_dict[field_name]
@@ -52,7 +52,7 @@ class DesignSpace(SimpleNamespace):
             elif current_val_idx == len(possible_vals) - 1:
                 idx = current_val_idx - 1
             else:
-                idx = current_val_idx + random.choice([-1, 1])
+                idx = current_val_idx + self.rng.choice([-1, 1])
             accel_dict[field_name] = possible_vals[idx]
 
         return self.accelerator_state_class(**accel_dict)
@@ -72,8 +72,8 @@ class AcceleratorOptimizer(Annealer):
                  hw_constraints,
                  logdir,
                  *,
-                 accelerator_mapper: AsyncAcceleratorMapper
-                 ):
+                 accelerator_mapper: AsyncAcceleratorMapper,
+                 rng: random.Random):
         self.latest_penalty_details = None
         self.num_accelerators = num_accelerators
         self.accelerator_cfg = accelerator_cfg
@@ -93,15 +93,16 @@ class AcceleratorOptimizer(Annealer):
         self.accelerator_metric_logger = AcceleratorMetricLogger(self.logdir)
         self.subaccelerator_params_logger = SubacceleratorParamsLogger(self.logdir)
         self.design_space = DesignSpace(accelerator_cfg.state,
-                                        **accelerator_cfg.design_space)
+                                        **accelerator_cfg.design_space,
+                                        rng=rng)
 
         self.accelerator_mapper = accelerator_mapper
         # initialize scheduler
-        self.scheduler = Scheduler(args.scheduler_type)
+        self.scheduler = Scheduler(scheduler_type=args.scheduler_type, rng=rng)
         self.schedule_penalizer = SchedulePenalizer(self.accuracy_lut)
 
         initial_state = self.get_initial_state()
-        super().__init__(initial_state)
+        super().__init__(initial_state, rng=rng)
         assert self.state == initial_state
 
         # get baseline measurements

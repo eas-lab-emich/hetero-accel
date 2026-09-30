@@ -1,28 +1,25 @@
 import gc
 import logging
-import traceback
 import os.path
-import pickle
+import random
+import traceback
+from copy import deepcopy
+from types import SimpleNamespace
+
 import numpy as np
 import pandas as pd
 import torch
 import yaml
-from copy import deepcopy
-from types import SimpleNamespace
+
 from src import dataset_dirs
-from src.mapping.api import ConvolutionProblem, async_mapper
-from src.workload import MultiDNNWorkload
-from src.utils import env_cfg
-from src.args import OperationMode
-from src.net_wrapper import TorchNetworkWrapper
+from src.accelerator_cfg import AcceleratorProfile
 from src.compression.compressor import Compressor
 from src.dataset import load_data
-from src.accelerator_cfg import AcceleratorProfile
+from src.mapping.api import ConvolutionProblem, async_mapper
+from src.net_wrapper import TorchNetworkWrapper
 from src.optimization.optimizer import AcceleratorOptimizer
-from src.baseline import run_baseline
-from src.sota import run_sota
-from src.partition import run_partition_comparison
-from src.other_heuristics import run_genetic_algorithm, run_random_search
+from src.utils import env_cfg
+from src.workload import MultiDNNWorkload
 
 BASELINE_PRECISION = 8
 
@@ -57,38 +54,17 @@ def main():
     logging.basicConfig(level=logging.DEBUG)
     args = env_cfg()
     args.logdir = logging.getLogger().logdir
-    # save arguments as pkl, for reproducibility
-    with open(os.path.join(args.logdir, 'args.pkl'), 'wb') as f:
-        pickle.dump(vars(args), f)
+    # TODO take the original pickle and just dump args in a json, yaml, or a general text file
+    # with open(os.path.join(args.logdir, 'args.pkl'), 'wb') as f:
+    #     pickle.dump(vars(args), f)
 
     # initialize the workload
     workload = setup_workload(args)
     # create a LUT of quantization profiles for each DNN-precision pairing
     dnn_accuracy_lut = quant_exploration(args, workload)
 
-    if args.operation_mode == OperationMode.Ours:
-        # perform a DSE to define the sub-accelerator architectures
-        accelerator_exploration(args, workload, dnn_accuracy_lut)
+    accelerator_exploration(args, workload, dnn_accuracy_lut)
 
-    # evaluate a given baseline accelerator architecture
-    elif args.operation_mode == OperationMode.Baseline:
-        run_baseline(args, workload, dnn_accuracy_lut)
-
-    # execute the optimizations in the state-of-the-art
-    elif args.operation_mode == OperationMode.SOTA:
-        run_sota(args, workload, dnn_accuracy_lut)
-
-    # compare our technique against partition-aware scheduling
-    elif args.operation_mode == OperationMode.Partition:
-        run_partition_comparison(args, workload, dnn_accuracy_lut)
-
-    # compare against a genetic algorithm
-    elif args.operation_mode == OperationMode.Genetic:
-        run_genetic_algorithm(args, workload, dnn_accuracy_lut)
-
-    # compare against a random-search approach
-    elif args.operation_mode == OperationMode.RandomSearch:
-        run_random_search(args, workload, dnn_accuracy_lut)
 
 
 def setup_workload(args):
@@ -364,6 +340,7 @@ def accelerator_exploration(args, workload, accuracy_lut):
 
     accelerator_mapper = async_mapper(args.logdir)
     accelerator_mapper.start()
+    rng = random.Random(args.global_seed)
 
     optimizer = AcceleratorOptimizer(args=args,
                                      num_accelerators=len(precision_options),
@@ -373,17 +350,12 @@ def accelerator_exploration(args, workload, accuracy_lut):
                                      hw_constraints=SimpleNamespace(deadline=args.deadline_constraint,
                                                                     area=args.area_constraint),
                                      logdir=args.logdir,
-                                     accelerator_mapper=accelerator_mapper
-                                     )
+                                     accelerator_mapper=accelerator_mapper,
+                                     rng=rng)
     try:
-        if not args.skip_exploration:
-            optimizer.run()
-
+        optimizer.run()
         logger.info("*------------------*")
-        comment = ''
-        if args.skip_exploration and getattr(args, 'load_state_from', None) is not None:
-            comment = f' (loaded from: {args.load_state_from}) '
-        logger.info(f"Final heterogeneous accelerator{comment}:")
+        logger.info(f"Final heterogeneous accelerator:")
         for state in optimizer.best_state:
             logger.info(f'\t{state}')
         logger.info("*------------------*")

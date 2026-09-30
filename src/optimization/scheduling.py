@@ -173,9 +173,10 @@ solver_args_dict = {
 
 
 class Scheduler:
-    """Implementations for the scheduler"""
-    def __init__(self, scheduler_type=SchedulerType.Ours):
+    def __init__(self, *, rng: random.Random, scheduler_type=SchedulerType.Ours):
+        """Implementations for the scheduler"""
         self.type = scheduler_type
+        self.rng = rng
         self.__run_f = {
             SchedulerType.Ours: self._run_ours,
             SchedulerType.Random: self._run_random_scheduling,
@@ -308,9 +309,9 @@ class Scheduler:
         """
         schedule = Schedule(bins)
         for item in items:
-            bin_sel = random.choice(bins)
+            bin_sel = self.rng.choice(bins)
             while (item, bin_sel) not in weight_dict:
-                bin_sel = random.choice(bins)
+                bin_sel = self.rng.choice(bins)
             schedule.add(item, bin_sel, weight_dict[(item, bin_sel)])
         return schedule
 
@@ -329,7 +330,7 @@ class Scheduler:
         """
         schedule = Schedule(bins)
 
-        random.shuffle(items)
+        self.rng.shuffle(items)
         queue = deque(items, maxlen=len(items))
         ready_list = {bin: [] for bin in bins}
         response_time = {item: {bin: -1 for bin in bins} for item in items}
