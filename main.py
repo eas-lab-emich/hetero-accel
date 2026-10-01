@@ -1,9 +1,11 @@
 import gc
 import logging
 import os.path
-import random
 import traceback
+from concurrent.futures import wait
+from concurrent.futures.thread import ThreadPoolExecutor
 from copy import deepcopy
+from os import makedirs
 from types import SimpleNamespace
 
 import numpy as np
@@ -64,7 +66,6 @@ def main():
     dnn_accuracy_lut = quant_exploration(args, workload)
 
     accelerator_exploration(args, workload, dnn_accuracy_lut)
-
 
 
 def setup_workload(args):
@@ -340,29 +341,58 @@ def accelerator_exploration(args, workload, accuracy_lut):
 
     accelerator_mapper = async_mapper(args.logdir)
     accelerator_mapper.start()
-    rng = random.Random(args.global_seed)
 
-    optimizer = AcceleratorOptimizer(args=args,
-                                     num_accelerators=len(precision_options),
-                                     accelerator_cfg=accel_cfg,
-                                     workload=workload,
-                                     accuracy_lut=accuracy_lut,
-                                     hw_constraints=SimpleNamespace(deadline=args.deadline_constraint,
-                                                                    area=args.area_constraint),
-                                     logdir=args.logdir,
-                                     accelerator_mapper=accelerator_mapper,
-                                     rng=rng)
-    try:
-        optimizer.run()
-        logger.info("*------------------*")
-        logger.info(f"Final heterogeneous accelerator:")
-        for state in optimizer.best_state:
-            logger.info(f'\t{state}')
-        logger.info("*------------------*")
-    finally:
-        accelerator_mapper.stop()
-        optimizer.close()
+    futures = []
+    executor = ThreadPoolExecutor(max_workers=2)
 
+    def run_optimizer(opt_seed):
+        workspace_dir = os.path.join(args.logdir, str(opt_seed))
+        makedirs(workspace_dir, exist_ok=True)
+        workspace_dir_stl = os.path.join(args.logdir, str(opt_seed) + "_stl")
+        makedirs(workspace_dir_stl, exist_ok=True)
+
+        optimizer = None
+        try:
+            if args.run_baseline:
+                optimizer = AcceleratorOptimizer(args=args,
+                                                 num_accelerators=len(precision_options),
+                                                 accelerator_cfg=accel_cfg,
+                                                 workload=workload,
+                                                 accuracy_lut=accuracy_lut,
+                                                 hw_constraints=SimpleNamespace(deadline=args.deadline_constraint,
+                                                                                area=args.area_constraint),
+                                                 working_dir=workspace_dir,
+                                                 accelerator_mapper=accelerator_mapper,
+                                                 seed=opt_seed, with_stl=False)
+            optimizer_stl = AcceleratorOptimizer(args=args,
+                                             num_accelerators=len(precision_options),
+                                             accelerator_cfg=accel_cfg,
+                                             workload=workload,
+                                             accuracy_lut=accuracy_lut,
+                                             hw_constraints=SimpleNamespace(deadline=args.deadline_constraint,
+                                                                            area=args.area_constraint),
+                                             working_dir=workspace_dir_stl,
+                                             accelerator_mapper=accelerator_mapper,
+                                             seed=opt_seed, with_stl=True)
+        except:
+            logger.exception("Exception encountered during optimizer initialization")
+            raise
+        try:
+            if optimizer:
+                optimizer.run()
+            optimizer_stl.run()
+        except:
+            logger.exception("Exception encountered while running optimizer")
+            raise
+        finally:
+            if optimizer:
+                optimizer.close()
+            optimizer_stl.close()
+
+    for seed in args.seeds:
+        futures.append(executor.submit(run_optimizer, seed))
+    wait(futures)
+    accelerator_mapper.stop()
 
 
 if __name__ == '__main__':

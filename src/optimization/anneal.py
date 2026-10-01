@@ -12,6 +12,7 @@ import signal
 import sys
 import time
 
+
 # forked from https://github.com/perrygeo/simanneal
 
 def round_figures(x, n):
@@ -22,13 +23,12 @@ def round_figures(x, n):
 def time_string(seconds):
     """Returns time in seconds as a string formatted HHHH:MM:SS."""
     s = int(round(seconds))  # round to nearest second
-    h, s = divmod(s, 3600)   # get hours and remainder
-    m, s = divmod(s, 60)     # split remainder into minutes and seconds
+    h, s = divmod(s, 3600)  # get hours and remainder
+    m, s = divmod(s, 60)  # split remainder into minutes and seconds
     return '%4i:%02i:%02i' % (h, m, s)
 
 
 class Annealer(object):
-
     """Performs simulated annealing by calling functions to calculate
     energy and make moves on a state.  The temperature schedule for
     annealing may be provided manually or estimated automatically.
@@ -60,8 +60,6 @@ class Annealer(object):
             initial_state nor load_state')
         self.rng = rng
 
-        signal.signal(signal.SIGINT, self.set_user_exit)
-
     def save_state(self, fname=None):
         """Saves state to pickle"""
         if not fname:
@@ -84,11 +82,6 @@ class Annealer(object):
     def energy(self):
         """Calculate state's energy"""
         pass
-
-    def set_user_exit(self, signum, frame):
-        """Raises the user_exit flag, further iterations are stopped
-        """
-        self.user_exit = True
 
     def set_schedule(self, schedule):
         """Takes the output from `auto` and sets the attributes

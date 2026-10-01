@@ -24,40 +24,33 @@ class StepResult(NamedTuple):
 class SchedulePenalizer:
 
     def __init__(self, accuracy_lut):
-        self.lambda_p1 = 1.15e15
-        # self.lambda_p1 = 0
-        # self.lambda_p2 = 0.02 * 1e17
+        self.lambda_p1 = 0.015
         self.lambda_p2 = 0
         self.lambda_p3 = 0
-        # self.lambda_p3 = 0
         self.window_size = 3
         self.accuracy_lut = accuracy_lut
-        self.step_results = []
         self.baseline_precision = 8
         self.risk_threshold = 8
 
-    def penalize(self, latest_schedule: Schedule) -> Penalty:
-        p1 = self.__compute_p1(latest_schedule)
+    def penalize(self, e, latest_schedule: Schedule, history, enabled) -> Penalty:
+        p1 = self.__compute_p1(latest_schedule, history) if latest_schedule and latest_schedule.assigned else 0 # FIXME across components, really should be setting penalty to inf rather than edp
         # p2 = self.__compute_p2(self.schedule_history)
         p2 = 0
         # p3 = self.__compute_p3(latest_schedule)
         p3 = 0
-        total_penalty = (self.lambda_p1 * p1 + self.lambda_p2 * p2 + self.lambda_p3 * p3)
+        total_penalty = (self.lambda_p1 * e * p1 + self.lambda_p2 * e * p2 + self.lambda_p3 * e * p3) if enabled else 0
         return Penalty(total_penalty, self.__aggregate_loss(latest_schedule),
                        p1, p2, p3,
                        self.lambda_p1, self.lambda_p2, self.lambda_p3,
                        self.window_size, self.risk_threshold)
 
-    def ingest_results(self, step_results: StepResult):
-        self.step_results.append(step_results)
-
-    def __compute_p1(self, latest_schedule):
-        eligible_schedules = [result.schedule for result in self.step_results if result.accepted]
+    def __compute_p1(self, latest_schedule, history):
+        eligible_schedules = [result.schedule for result in history if result.accepted]
         eligible_schedules.append(latest_schedule)
         penalty = 0
         for index, schedule in enumerate(eligible_schedules):
             budget_remainder = self.__budget_remainder(schedule)
-            base_penalty = budget_remainder if budget_remainder > 10 else 0
+            base_penalty = max(0, budget_remainder - 10)
             penalty += np.exp(1.2 * (index - len(eligible_schedules) + 1)) * base_penalty
         return penalty
 

@@ -173,7 +173,7 @@ solver_args_dict = {
 
 
 class Scheduler:
-    def __init__(self, *, rng: random.Random, scheduler_type=SchedulerType.Ours):
+    def __init__(self, *, rng: random.Random, scheduler_type=SchedulerType.Ours, workspace_dir):
         """Implementations for the scheduler"""
         self.type = scheduler_type
         self.rng = rng
@@ -184,6 +184,7 @@ class Scheduler:
             SchedulerType.SOTA: self._run_sota,
             SchedulerType.PartitionAware: self._run_partition_aware
         }.get(scheduler_type)
+        self.workspace_dir = workspace_dir
 
     def run(self, *args, **kwargs):
         """Wrapper over the main scheduling function, may be needed
@@ -265,8 +266,7 @@ class Scheduler:
             capacities = [int(alpha * n_speed * best_case_latency) for n_speed in normalized_speeds]
 
         solver_dir = os.path.join(project_dir, 'generalizedassignmentsolver')
-        logdir = logging.getLogger().logdir
-        resdir = os.path.join(logdir, 'scheduler_solver', str(uuid.uuid4()))
+        resdir = os.path.join(self.workspace_dir, 'scheduler_solver', str(uuid.uuid4()))
         os.makedirs(resdir, exist_ok=True)
         infile = os.path.join(resdir, 'inputs')
         outfile = os.path.join(resdir, 'output')

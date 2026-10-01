@@ -23,3 +23,9 @@ mapper_workspace
 .idea
 .python-version
 results_neighbor
+*.pkl
+*.png
+corrected*/**
+stl_mult*/**
+with_stl*/**
+anneal_neighbor_results

@@ -1,10 +1,9 @@
 import logging
 import os
 import pickle
-import time
 from concurrent.futures import Future
 from pathlib import Path
-from threading import Lock, Thread, Event
+from threading import Thread, Event
 from typing import Dict
 
 from src.mapping.api import AsyncAcceleratorMapper, MappingRequest, MappingStats, ConvolutionProblem, \
@@ -27,36 +26,32 @@ class CachedAsyncMapperFacade(AsyncAcceleratorMapper):
 
     def __init__(self, wrapped):
         cache_dir = get_cache_dir()
-        if cache_dir is None:
+        if not cache_dir:
             raise RuntimeError("Cannot initialize CachedAsyncMapper without a cache directory!")
         self.cache_path = Path(os.path.join(cache_dir, CACHE_FILE_NAME))
         self.cache: Dict[tuple[AcceleratorConfiguration, ConvolutionProblem], MappingStats] = {}
         self.wrapped = wrapped
-        self.cache_lock = Lock()
         self.flush_pending = False
         self.flush_thread = None
         self.shutdown = False
         self.wake = Event()
 
     def map(self, request: MappingRequest) -> Future[MappingStats]:
-        with self.cache_lock:
-            cached_stats = self.cache.get(self._cache_key(request))
-            if cached_stats:
-                result = Future()
-                result.set_result(cached_stats.model_copy(
-                    update={'id': request.id}
-                ))
-                return result
+        key = self._cache_key(request)
+        cached_stats = self.cache.get(key)
+        if cached_stats is not None:
+            result = Future()
+            result.set_result(cached_stats.model_copy(update={'id': request.id}))
+            return result
 
         source_result = self.wrapped.map(request)
         result = Future()
 
-        def update_cache(completed: Future[MappingStats]):
+        def update_cache(completed):
             try:
                 mapping_stats = completed.result()
-                with self.cache_lock:
-                    self.cache[self._cache_key(request)] = mapping_stats
-                    self.flush_pending = True
+                self.cache[key] = mapping_stats  # atomic
+                self.flush_pending = True
                 result.set_result(mapping_stats)
             except BaseException as e:
                 result.set_exception(e)
@@ -80,29 +75,31 @@ class CachedAsyncMapperFacade(AsyncAcceleratorMapper):
         try:
             self.wrapped.stop()
         finally:
-            with self.cache_lock:
-                self.shutdown = True
+            self.shutdown = True
             self.wake.set()
             self.flush_thread.join()
-            return
 
     def _scheduled_flush(self):
-        shutdown = self.shutdown
-        while not shutdown:
+        while True:
             self.wake.wait(timeout=60)
             self.wake.clear()
-            with self.cache_lock:
-                shutdown = self.shutdown
-                if self.flush_pending:
+            if self.flush_pending:
+                self.flush_pending = False
+                try:
                     self._flush()
-                    self.flush_pending = False
+                except Exception:
+                    logger.exception("Failed to flush cache, retrying in 60 seconds")
+                    self.flush_pending = True
+            if self.shutdown:
+                return
 
     def _flush(self):
-        to_flush = {}
-        for key, result in self.cache.items():
-            to_flush[key] = tuple(result.model_dump().values())
-        with open(self.cache_path, "wb") as f:
+        snapshot = dict(self.cache)
+        to_flush = {k: tuple(v.model_dump().values()) for k, v in snapshot.items()}
+        tmp_path = self.cache_path.with_suffix(".tmp")
+        with open(tmp_path, "wb") as f:
             pickle.dump(to_flush, f)
+        os.replace(tmp_path, self.cache_path)
 
     @staticmethod
     def _cache_key(request: MappingRequest):

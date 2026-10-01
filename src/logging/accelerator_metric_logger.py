@@ -17,18 +17,22 @@ class AcceleratorMetricLogger(MetricLogger):
              "energy",
              "latency",
              "edp",
-             "penalty",
+             "incumbent_objective",
+             "candidate_objective",
+             "delta_objective",
+             "proposed_penalty",
+             "current_penalty",
              "area",
              "scheduled_dnns",
              "accuracy_loss",
              "p1",
-             "p2",
-             "p3",
+             # "p2",
+             # "p3",
              "lambda1",
-             "lambda2",
-             "lambda3",
-             "risk_threshold",
-             "window",
+             # "lambda2",
+             # "lambda3",
+             # "risk_threshold",
+             # "window",
              "evaluation_result"])
 
     @staticmethod
@@ -40,8 +44,12 @@ class AcceleratorMetricLogger(MetricLogger):
             scheduled_dnns[entry.bin.precision] += 1
         return ";".join(f"{k}:{v}" for k, v in sorted(scheduled_dnns.items()))
 
-    def log(self, *, iteration, is_improved, is_accepted, sim_temperature, energy, latency, edp, penalty, area, scheduled: Schedule,
-            penalty_details: Penalty, evaluation_result: EvaluationResult):
+    def log(self, *, iteration, is_improved, is_accepted,
+            sim_temperature, energy, latency, edp, penalty, area,
+            scheduled: Schedule, penalty_details: Penalty,
+            evaluation_result: EvaluationResult,
+            previous_penalty_details: Penalty,
+            current_objective, proposed_objective):
         self._check_closed()
         self._write_row([
             iteration,
@@ -51,17 +59,21 @@ class AcceleratorMetricLogger(MetricLogger):
             self._format_sci_notation(energy),
             latency,
             self._format_sci_notation(edp),
+            self._format_sci_notation(current_objective),
+            self._format_sci_notation(proposed_objective),
+            self._format_sci_notation(proposed_objective - current_objective),
             self._format_sci_notation(penalty),
+            self._format_sci_notation(previous_penalty_details.total_penalty if previous_penalty_details else None),
             self._format_float(area),
             self._parse_scheduled(scheduled),
             None if not penalty_details else self._format_float(penalty_details.aggregate_accuracy_loss),
             None if not penalty_details else self._format_float(penalty_details.p1),
-            None if not penalty_details else self._format_float(penalty_details.p2),
-            None if not penalty_details else self._format_float(penalty_details.p3),
+            # None if not penalty_details else self._format_float(penalty_details.p2),
+            # None if not penalty_details else self._format_float(penalty_details.p3),
             None if not penalty_details else self._format_sci_notation(penalty_details.lambda_1),
-            None if not penalty_details else self._format_sci_notation(penalty_details.lambda_2),
-            None if not penalty_details else self._format_sci_notation(penalty_details.lambda_3),
-            None if not penalty_details else penalty_details.risk_threshold,
-            None if not penalty_details else penalty_details.window,
+            # None if not penalty_details else self._format_sci_notation(penalty_details.lambda_2),
+            # None if not penalty_details else self._format_sci_notation(penalty_details.lambda_3),
+            # None if not penalty_details else penalty_details.risk_threshold,
+            # None if not penalty_details else penalty_details.window,
             evaluation_result.value
         ])

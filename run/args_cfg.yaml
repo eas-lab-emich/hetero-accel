@@ -1,69 +1,83 @@
 ---
 app_args:
-        operation_mode: ours
-        output_dir: 'out_3_13'
-        name: ours
-        deterministic: True
-        global_seed: 115119111
-#        dnn_accuracy_lut_file: /home/welby/workspace/hetero-accel/workloads/lut_a.csv
-        dnn_accuracy_lut_file: /home/welby/workspace/hetero-accel/workloads/lut_b.csv
-        scheduler_type: ours
-        solver_type: mthggreedyregret
-        skip_exploration: False
+  operation_mode: ours
+  output_dir: 'out_3_13'
+  name: ours
+  deterministic: True
+  global_seed: 115119111
+  run_baseline: True
+  seeds:
+#    - 0
+    - 1337
+    - 739144
+    - 600671
+    - 946764
+#    - 6666
+#    - 95412
+#    - 121254
+#    - 4239238
+#    - 52911916
+#    - 115119111
+#    - 124321399
+#    - 512812230
+  dnn_accuracy_lut_file: workloads/lut_a.csv
+  scheduler_type: ours
+  solver_type: mthggreedyregret
+  skip_exploration: False
 
 dnn_op_mode_args:
-        evaluate_model_mode: False
-        train_model_mode: False
-        test_pruning_quant_mode: False
-        model_summary_mode: null
-        test_timeloop_accelergy_mode: False
+  evaluate_model_mode: False
+  train_model_mode: False
+  test_pruning_quant_mode: False
+  model_summary_mode: null
+  test_timeloop_accelergy_mode: False
 
 workload_args:
-        workload_idx: ClassifiersB
-        workers: 16
-        batch_size: 32
-        load_serialized: False
-        gpus: 0
-        cpu: True
-        validation_split: 0.0
-        effective_train_size: 0.5
-        effective_valid_size: 0.5
-        effective_test_size: 0.5
-        model_verbose: False
-        optimizer_type: adam
+  workload_idx: ClassifiersA
+  workers: 16
+  batch_size: 32
+  load_serialized: False
+  gpus: 0
+  cpu: True
+  validation_split: 0.0
+  effective_train_size: 0.5
+  effective_valid_size: 0.5
+  effective_test_size: 0.5
+  model_verbose: False
+  optimizer_type: adam
 
 compression_args:
-        pruning_group_type: rows
-        pruning_high: 1.0
-        pruning_low: 0.0
-        pruning_incr: 0.05
-        quant_high: 7
-        quant_low: 4
-        quant_incr: 1
-        use_validation_set: False
-        # constraints
-        top1_constraint: 8
-        top5_constraint: null
-        loss_constraint: null
-        mIOU_constraint: null
-        AvgPixelAcc_constraint: 2
-        mAP[IOU=0.5]_constraint: 4
-        mAP[IoU=0.50:0.95]_constraint: null
-        mAP[IOU=0.75]_constraint: null
-        size_constraint: 50
-        sparsity_constraint: null
+  pruning_group_type: rows
+  pruning_high: 1.0
+  pruning_low: 0.0
+  pruning_incr: 0.05
+  quant_high: 7
+  quant_low: 4
+  quant_incr: 1
+  use_validation_set: False
+  # constraints
+  top1_constraint: 8
+  top5_constraint: null
+  loss_constraint: null
+  mIOU_constraint: null
+  AvgPixelAcc_constraint: 2
+  mAP[IOU=0.5]_constraint: 4
+  mAP[IoU=0.50:0.95]_constraint: null
+  mAP[IOU=0.75]_constraint: null
+  size_constraint: 50
+  sparsity_constraint: null
 
 accel_args:
-        accelerator_arch_type: eyeriss
-        deadline_constraint: null
-        area_constraint: 0.3
+  accelerator_arch_type: eyeriss
+  deadline_constraint: null
+  area_constraint: 0.3
 
 simanneal_args:
-        simannel_state_delta: 0.4
-        simanneal_Tmax: 50000000000000000.0
-        simanneal_Tmin: 8000000000000000.0
-        simanneal_steps: 125
-#        simanneal_updates: 25 # NOT USED
-        simanneal_auto_schedule: False
-        simanneal_optimization_metric: edp_artificial
+  simannel_state_delta: 0.4
+  simanneal_Tmax: 50000000000000000.0
+  simanneal_Tmin: 8000000000000000.0
+  simanneal_steps: 125
+  #        simanneal_updates: 25 # NOT USED
+  simanneal_auto_schedule: False
+  simanneal_optimization_metric: edp_artificial
 

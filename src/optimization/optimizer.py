@@ -1,3 +1,4 @@
+import copy
 import itertools
 import logging
 import math
@@ -12,7 +13,6 @@ from src.evaluation_result import EvaluationResult
 from src.logging.accelerator_metric_logger import AcceleratorMetricLogger
 from src.logging.subaccelerator_params_logger import SubacceleratorParamsLogger
 from src.mapping.api import AcceleratorConfiguration, MappingRequest, AsyncAcceleratorMapper
-from src.optimization.anneal import Annealer
 from src.optimization.evaluation import SchedulePenalizer, StepResult
 from src.optimization.scheduling import SolverType, Scheduler
 
@@ -58,10 +58,24 @@ class DesignSpace(SimpleNamespace):
         return self.accelerator_state_class(**accel_dict)
 
 
-class AcceleratorOptimizer(Annealer):
+class AcceleratorOptimizer:
     """
     Implementation of the annealing optimizer for heterogeneous accelerators.
     """
+
+    # defaults
+    Tmax = 25000.0
+    Tmin = 2.5
+    steps = 50000
+    updates = 100
+    copy_strategy = 'deepcopy'
+    user_exit = False
+    save_state_on_exit = False
+
+    # placeholders
+    best_state = None
+    best_energy = None
+    start = None
 
     def __init__(self,
                  args,
@@ -70,11 +84,13 @@ class AcceleratorOptimizer(Annealer):
                  workload,
                  accuracy_lut,
                  hw_constraints,
-                 logdir,
+                 working_dir,
                  *,
                  accelerator_mapper: AsyncAcceleratorMapper,
-                 rng: random.Random):
-        self.latest_penalty_details = None
+                 seed,
+                 with_stl):
+        self.previous_edp = self.previous_penalty = 0
+        self.latest_penalty_details = self.previous_penalty_details = None
         self.num_accelerators = num_accelerators
         self.accelerator_cfg = accelerator_cfg
         self.workload = workload
@@ -86,24 +102,30 @@ class AcceleratorOptimizer(Annealer):
         self.area_dict = OrderedDict()
         self.step = 0
         self.state = None
-        self.under_eval_state : list | None = None
-        self.latest_energy = self.latest_penalty = self.latest_latency = self.latest_edp = self.latest_area = self.latest_evaluation_result = None
+        self.under_eval_state: list | None = None
+        self.latest_energy = self.latest_latency = self.latest_edp = self.latest_area = self.latest_evaluation_result = None
+        self.latest_penalty = 0
         self.solver_type = SolverType.MTHGGreedyRegret
-        self.logdir = logdir
+        self.logdir = working_dir
         self.accelerator_metric_logger = AcceleratorMetricLogger(self.logdir)
         self.subaccelerator_params_logger = SubacceleratorParamsLogger(self.logdir)
+        rng = random.Random(seed)
+        self.seed = seed
         self.design_space = DesignSpace(accelerator_cfg.state,
                                         **accelerator_cfg.design_space,
                                         rng=rng)
+        self.with_stl = with_stl
+        self.step_results = []
+        self.rng = rng
 
         self.accelerator_mapper = accelerator_mapper
         # initialize scheduler
-        self.scheduler = Scheduler(scheduler_type=args.scheduler_type, rng=rng)
+        self.scheduler = Scheduler(scheduler_type=args.scheduler_type, rng=rng, workspace_dir=working_dir)
         self.schedule_penalizer = SchedulePenalizer(self.accuracy_lut)
 
         initial_state = self.get_initial_state()
-        super().__init__(initial_state, rng=rng)
-        assert self.state == initial_state
+        self.initial_state = initial_state
+        self.state = initial_state
 
         # get baseline measurements
         self.under_eval_state = self.state
@@ -119,20 +141,11 @@ class AcceleratorOptimizer(Annealer):
                     f"EDP={self.initial_edp:.3e}, "
                     f"Area={self.initial_area:.3e}")
 
-        # setup scheduling parameters during annealing
-        self.copy_strategy = 'deepcopy'
-        if args is None or \
-                getattr(args, 'simanneal_auto_schedule', False) or \
-                any(getattr(args, arg, None) is None
-                    for arg in ['simanneal_Tmax', 'simanneal_Tmin', 'simanneal_steps', 'simanneal_updates']):
-            # automatic annealing schedule
-            self.set_schedule(self.auto(minutes=10))
-        else:
-            # user-defined annealing schedule
-            self.Tmax = args.simanneal_Tmax
-            self.Tmin = args.simanneal_Tmin
-            self.steps = args.simanneal_steps
-            self.updates = args.simanneal_steps
+        # user-defined annealing schedule
+        self.Tmax = args.simanneal_Tmax
+        self.Tmin = args.simanneal_Tmin
+        self.steps = args.simanneal_steps
+        self.updates = args.simanneal_steps
 
     def close(self):
         self.accelerator_metric_logger.close()
@@ -155,15 +168,6 @@ class AcceleratorOptimizer(Annealer):
         for state in initial_state:
             logger.info(f"\t{state}")
         return initial_state
-
-
-    def set_state(self, state):
-        """Set a given state
-        """
-        self.state = state
-        self.latest_energy = self.latest_latency = self.latest_edp = self.latest_area = None
-        self.latest_schedule = None
-
 
     def run(self):
         """Run Simulated Annealing
@@ -190,7 +194,7 @@ class AcceleratorOptimizer(Annealer):
 
         evaluation_result = self.latest_evaluation_result if self.latest_evaluation_result else EvaluationResult.UNKNOWN
 
-        self.schedule_penalizer.ingest_results(
+        self.step_results.append(
             StepResult(edp=self.latest_edp, penalty=self.latest_penalty, accepted=acceptance, improved=improvement,
                        schedule=self.latest_schedule, evaluation_result=evaluation_result))
 
@@ -206,7 +210,10 @@ class AcceleratorOptimizer(Annealer):
             area=self.latest_area,
             scheduled=self.latest_schedule,
             penalty_details=self.latest_penalty_details,
-            evaluation_result=evaluation_result
+            previous_penalty_details=self.previous_penalty_details,
+            evaluation_result=evaluation_result,
+            current_objective=self.previous_edp + self.previous_penalty,
+            proposed_objective=self.latest_edp + self.latest_penalty
         )
         for accl in self.under_eval_state or []:
             self.subaccelerator_params_logger.log(
@@ -230,11 +237,12 @@ class AcceleratorOptimizer(Annealer):
         self.step += 1
         # randomly step in the design space for the given accelerator
         self.under_eval_state = self.state = [self.design_space.neighborhood_move(accelerator)
-                                 for accelerator in self.state]
+                                              for accelerator in self.state]
 
         logger.info(f"=> Move #{int(self.step)} taken. New state:")
         for state in self.under_eval_state:
             logger.info(f"\t{state}")
+        self.energy()
 
     def energy(self, initial=False):
         """Wrapper function for estimating the SA energy metric
@@ -255,14 +263,7 @@ class AcceleratorOptimizer(Annealer):
 
         logger.info("*--------------*")
 
-        if self.latest_edp is None:
-            self.latest_penalty = math.inf
-            self.latest_penalty_details = None
-            return self.latest_penalty
-
-        self.latest_penalty_details = self.schedule_penalizer.penalize(self.latest_schedule)
-        self.latest_penalty = self.latest_penalty_details.total_penalty
-        return self.latest_edp + self.latest_penalty
+        return self.latest_edp
 
     def _evaluation(self) -> EvaluationResult:
         """Evaluate the fitness of the current state
@@ -342,8 +343,9 @@ class AcceleratorOptimizer(Annealer):
                 edp_dict[metric_key] += results.edp
                 completed += 1
 
-                logger.info(
-                    f"Received results for (accel,dnn)={metric_key}, id={results.id}, mappings_complete={completed}/{deferred_count}")
+                if completed % 20 == 0 or completed == deferred_count:
+                    logger.info(
+                        f"Received results for seed={self.seed}, (accel,dnn)={metric_key}, id={results.id}, mappings_complete={completed}/{deferred_count}")
 
                 # store the accelerator area from the results of the last mapping
                 # all layers with the same accelerator should give the same area
@@ -389,7 +391,8 @@ class AcceleratorOptimizer(Annealer):
 
         if schedule is None:
             # return in case of invalid schedule
-            self.latest_energy = self.latest_latency = self.latest_edp = None
+            self.latest_energy = self.latest_latency = None
+            self.latest_edp = math.inf
             logger.info(f"Could not find valid schedule")
             return EvaluationResult.SCHEDULE_CONSTRAINT
 
@@ -414,3 +417,109 @@ class AcceleratorOptimizer(Annealer):
             return EvaluationResult.DEADLINE_CONSTRAINT
 
         return EvaluationResult.SUCCESS
+
+    def anneal(self):
+        """Minimizes the energy of a system by simulated annealing.
+
+        Parameters
+        state : an initial arrangement of the system
+
+        Returns
+        (state, energy): the best state and energy found.
+        """
+        step = 0
+        self.start = time()
+
+        # Precompute factor for exponential cooling from Tmax to Tmin
+        if self.Tmin <= 0.0:
+            raise Exception('Exponential cooling requires a minimum "\
+                "temperature greater than zero.')
+        Tfactor = -math.log(self.Tmax / self.Tmin)
+
+        # Note initial state
+        t = self.Tmax
+        e = self.energy()
+        prev_state = self.copy_state(self.state)
+        self.previous_edp = prev_energy = e
+        self.best_state = self.copy_state(self.state)
+        self.best_energy = e
+        trials, accepts, improves = 0, 0, 0
+        if self.updates > 0:
+            update_wavelength = self.steps / self.updates
+            self.update(step, t, e, None, None)
+
+        # Attempt moves to new states
+        while step < self.steps and not self.user_exit:
+            step += 1
+            t = self.Tmax * math.exp(Tfactor * step / self.steps)
+            self.move()
+            e = self.energy()
+
+            if e is None or self.latest_schedule is None:
+                e = math.inf
+                self.latest_penalty = 0
+                proposed_penalty: float = self.latest_penalty
+                self.latest_penalty_details = None
+            else:
+                self.latest_penalty_details = self.schedule_penalizer.penalize(e, self.latest_schedule,
+                                                                               self.step_results[:-1], self.with_stl)
+                self.latest_penalty = self.latest_penalty_details.total_penalty
+                proposed_penalty: float = self.latest_penalty
+
+            if prev_energy == math.inf:
+                self.previous_penalty_details = None
+                self.previous_penalty = 0
+                current_penalty: float = 0
+            else:
+                self.previous_penalty_details = self.schedule_penalizer.penalize(
+                    prev_energy, self.step_results[-1].schedule,
+                    self.step_results[:-1], self.with_stl)
+                current_penalty: float = self.previous_penalty_details.total_penalty
+                self.previous_penalty = current_penalty
+            de = e + proposed_penalty - prev_energy - current_penalty
+            trials += 1
+            acceptance_draw = self.rng.random()
+            if de > 0.0 and math.exp(-de / t) < acceptance_draw:
+                # Restore previous state
+                self.state = self.copy_state(prev_state)
+                e = prev_energy
+            else:
+                # Accept new state and compare to best state
+                accepts += 1
+                if de < 0.0:
+                    improves += 1
+                prev_state = self.copy_state(self.state)
+                prev_energy = e
+                if e < self.best_energy:
+                    self.best_state = self.copy_state(self.state)
+                    self.best_energy = e
+            self.previous_edp = prev_energy
+            if self.updates > 1:
+                if (step // update_wavelength) > ((step - 1) // update_wavelength):
+                    self.update(
+                        step, t, e, accepts / trials, improves / trials)
+                    trials, accepts, improves = 0, 0, 0
+
+        self.state = self.copy_state(self.best_state)
+
+        # Return best state and energy
+        return self.best_state, self.best_energy
+
+    def copy_state(self, state):
+        """Returns an exact copy of the provided state
+        Implemented according to self.copy_strategy, one of
+
+        * deepcopy : use copy.deepcopy (slow but reliable)
+        * slice: use list slices (faster but only works if state is list-like)
+        * method: use the state's copy() method
+        """
+        if self.copy_strategy == 'deepcopy':
+            return copy.deepcopy(state)
+        elif self.copy_strategy == 'slice':
+            return state[:]
+        elif self.copy_strategy == 'method':
+            return state.copy()
+        else:
+            raise RuntimeError('No implementation found for ' +
+                               'the self.copy_strategy "%s"' %
+                               self.copy_strategy)
