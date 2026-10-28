@@ -8,7 +8,6 @@ import numpy as np
 import pandas as pd
 from scipy.stats import wilcoxon
 
-
 REPO_ROOT = Path(__file__).resolve().parents[2]
 # RESULTS_ROOT = REPO_ROOT / "run/latest_log_dir"
 RESULTS_ROOT = REPO_ROOT / "corrected_seed_pairs_multiplicative_continuous/workload_a"
@@ -261,17 +260,22 @@ def paired_log_ratio_tests(datasets):
     observed_mean = float(log_ratios.mean())
 
     # Exact two-sided paired permutation test using all possible sign flips.
-    permutation_means = np.fromiter(
-        (
-            np.mean(log_ratios * np.asarray(signs))
-            for signs in itertools.product((-1.0, 1.0), repeat=len(log_ratios))
-        ),
-        dtype=float,
-        count=2 ** len(log_ratios),
+    # Monte Carlo two-sided paired permutation test
+    rng = np.random.default_rng(42)
+    n_permutations = 100_000
+
+    signs = rng.choice(
+        [-1.0, 1.0],
+        size=(n_permutations, len(log_ratios)),
     )
-    permutation_p = float(
-        np.mean(np.abs(permutation_means) >= abs(observed_mean) - 1e-15)
-    )
+
+    permutation_means = (signs * log_ratios).mean(axis=1)
+
+    permutation_p = (
+                            np.count_nonzero(
+                                np.abs(permutation_means) >= abs(observed_mean) - 1e-15
+                            ) + 1
+                    ) / (n_permutations + 1)
 
     # Wilcoxon signed-rank test on the same paired log ratios.
     nonzero = log_ratios[~np.isclose(log_ratios, 0.0)]
@@ -333,7 +337,7 @@ def print_paired_statistical_tests(datasets):
         f"{stats['median_percent_change']:+.2f}%"
     )
     print(
-        "  exact permutation p (2-sided):  "
+        "  Monte Carlo permutation p (2-sided): "
         f"{stats['permutation_p_two_sided']:.6f}"
     )
     print(
@@ -382,7 +386,7 @@ def plot_paired_edp_change(datasets, workload):
             f"{value:+.1f}%",
             va="center",
             ha=horizontal_alignment,
-            )
+        )
 
     axis.set_title(
         f"Workload {workload.upper()}: STL Best-EDP Change by Paired Seed"

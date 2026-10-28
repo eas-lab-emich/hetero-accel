@@ -16,7 +16,7 @@ class AsyncTimeloopMapper(AsyncAcceleratorMapper):
     def __init__(self, workdir, *, cleanup=True):
         logger.info("Initializing AsyncTimeloopMapper with max_workers=%s", self.get_parallelism())
         self.executor = ThreadPoolExecutor(max_workers=self.get_parallelism())
-        self.timeloop_mapper = TimeloopWrapper(workdir, cleanup=cleanup)
+        self.timeloop_mapper = TimeloopWrapper(workdir, cleanup=False)
 
     def map(self, request: MappingRequest) -> Future[MappingStats]:
         logger.debug("Submitting MappingRequest, request=%s", request)

@@ -64,7 +64,6 @@ class SchedulePenalizer:
         ].set_index("Network")["Accuracy"]
 
         total_budget = (max_accuracies - min_accuracies).sum()
-
         accel_accuracies = pd.DataFrame.from_dict(schedule.assigned, orient="index") \
             .reset_index(names="Network").rename(columns={"precision": "QuantBits"}) \
             .merge(self.accuracy_lut, on=["Network", "QuantBits"]).set_index("Network")["Accuracy"]
