@@ -650,6 +650,186 @@ def print_wasserstein(df: DataFrame, accepted_only=False):
     return
 
 
+def plot_regional_edp_improvements(
+        df: DataFrame,
+        partition_size: int = 2,
+):
+    params = ["pe_array_x", "pe_array_y"]
+    precisions = [6, 7, 8]
+    variants = ["baseline", "stl"]
+
+    group = df.copy()
+
+    # Map physical PE dimensions to discrete partition indices.
+    for param in params:
+        index_lookup = {
+            value: i
+            for i, value in enumerate(design_space[param])
+        }
+        group[param + "_region"] = (
+                group[param].map(index_lookup) // partition_size
+        )
+
+    n_regions = math.ceil(
+        len(design_space["pe_array_x"]) / partition_size
+    )
+
+    # Determine whether each proposed complete accelerator
+    # configuration establishes a new best feasible EDP.
+    #
+    # Calculate once per (seed, variant, step), not once
+    # per subaccelerator.
+    evaluations = (
+        group.drop_duplicates(["seed", "variant", "step"])
+        [["seed", "variant", "step", "edp", "evaluation_result"]]
+        .copy()
+        .sort_values(["seed", "variant", "step"])
+    )
+
+    evaluations["edp"] = pd.to_numeric(
+        evaluations["edp"], errors="coerce"
+    )
+
+    feasible = (
+            evaluations["evaluation_result"].eq("Success")
+            & np.isfinite(evaluations["edp"])
+    )
+
+    evaluations["feasible_edp"] = (
+        evaluations["edp"].where(feasible, np.inf)
+    )
+
+    run_keys = ["seed", "variant"]
+
+    previous_best = (
+        evaluations.groupby(["seed", "variant"])["feasible_edp"]
+        .transform(lambda values: values.cummin().shift(1).fillna(np.inf))
+    )
+
+    evaluations["is_improvement"] = (
+            feasible
+            & evaluations["edp"].lt(previous_best)
+    )
+
+    # Attach improvement flags to the per-subaccelerator rows.
+    group = group.merge(
+        evaluations[
+            ["seed", "variant", "step", "is_improvement"]
+        ],
+        on=["seed", "variant", "step"],
+        how="left",
+        validate="many_to_one",
+    )
+
+    probabilities = {}
+    counts = {}
+
+    for precision in precisions:
+        for variant in variants:
+            subset = group.loc[
+                group["precision"].eq(precision)
+                & group["variant"].eq(variant)
+                ].dropna(subset=[
+                "pe_array_x_region", "pe_array_y_region"
+            ])
+
+            total = np.zeros((n_regions, n_regions))
+            improved = np.zeros((n_regions, n_regions))
+
+            x = subset["pe_array_x_region"].astype(int)
+            y = subset["pe_array_y_region"].astype(int)
+
+            np.add.at(total, (y, x), 1)
+
+            successful = subset["is_improvement"].eq(True)
+            np.add.at(
+                improved,
+                (y[successful], x[successful]),
+                1,
+            )
+
+            probabilities[(precision, variant)] = np.divide(
+                improved,
+                total,
+                out=np.full_like(total, np.nan),
+                where=total > 0,
+            )
+
+            counts[(precision, variant)] = {
+                "total": total,
+                "improved": improved,
+            }
+    # Shared scale allows direct comparison across all panels.
+    finite_maxima = [
+        np.nanmax(matrix)
+        for matrix in probabilities.values()
+        if np.isfinite(matrix).any()
+    ]
+    vmax = max(finite_maxima, default=1.0)
+
+    figure, axes = plt.subplots(
+        3, 2, figsize=(11, 14),
+        sharex=True,
+        sharey=True,
+        constrained_layout=True,
+    )
+
+    cmap = plt.get_cmap("viridis").copy()
+    cmap.set_bad("lightgray")
+
+    for row, precision in enumerate(precisions):
+        for col, variant in enumerate(variants):
+            axis = axes[row, col]
+
+            matrix = probabilities[(precision, variant)]
+
+            image = axis.imshow(
+                matrix,
+                origin="lower",
+                cmap=cmap,
+                vmin=0,
+                vmax=vmax,
+            )
+
+            axis.set_title(
+                f"{precision}-bit {STYLES[variant]['label']}"
+            )
+            axis.set_xlabel("PE X partition")
+            axis.set_ylabel("PE Y partition")
+            axis.set_xticks(range(n_regions))
+            axis.set_yticks(range(n_regions))
+
+            # Show sample counts in each occupied region.
+            for y in range(n_regions):
+                for x in range(n_regions):
+                    total = int(counts[(precision, variant)]["total"][y, x])
+                    improved = int(counts[(precision, variant)]["improved"][y, x])
+
+                    if total:
+                        axis.text(
+                            x, y, f"{improved}/{total}",
+                            ha="center",
+                            va="center",
+                            fontsize=8,
+                            color="white"
+                            if matrix[y, x] > vmax * 0.5
+                            else "black",
+                        )
+
+    figure.colorbar(
+        image,
+        ax=axes,
+        shrink=0.65,
+        label="Probability of new best feasible EDP",
+    )
+
+    figure.suptitle(
+        "Regional EDP Improvement Frequency",
+        fontsize=15,
+    )
+
+    return figure, axes
+
 
 def plot_pe_occupancy(df: DataFrame, seed: str, precision: int,
                       partition_size: int = 2):
@@ -923,9 +1103,13 @@ def main():
     #         precision=8,
     #         partition_size=2,
     #     )
-    figure, axes = plot_aggregate_pe_occupancy(
+    # figure, axes = plot_aggregate_pe_occupancy(
+    #     subaccel_datasets,
+    #     precision=8,
+    #     partition_size=2,
+    # )
+    figure, axes = plot_regional_edp_improvements(
         subaccel_datasets,
-        precision=8,
         partition_size=2,
     )
 
