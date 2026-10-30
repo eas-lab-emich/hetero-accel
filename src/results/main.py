@@ -1,16 +1,21 @@
 import argparse
 import itertools
 import math
+from enum import Enum
 from pathlib import Path
+from typing import Dict
 
 import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
-from scipy.stats import wilcoxon
+from pandas import DataFrame
+from scipy.stats import wilcoxon, wasserstein_distance
+
+from src.train_test import validate
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 # RESULTS_ROOT = REPO_ROOT / "run/latest_log_dir"
-RESULTS_ROOT = REPO_ROOT / "corrected_seed_pairs_multiplicative_continuous/workload_a"
+RESULTS_ROOT = REPO_ROOT / "corrected_seed_pairs_multiplicative_continuous_frozen/workload_a"
 ITERATIONS = range(126)
 
 STL_SUFFIX = "_stl"
@@ -19,6 +24,14 @@ STYLES = {
     "stl": {"label": "STL", "color": "tab:orange", "linestyle": ":"},
 }
 
+design_space = {
+    "pe_array_x": [8, 10, 12, 14, 16, 20, 25],
+    "pe_array_y": [8, 10, 12, 14, 16, 20, 25],
+    "ifmap-spad_size": [8, 12, 16, 24, 32, 40, 48, 64],
+    "weights_spad_size": [256, 320, 384, 448, 512, 576, 640],
+    "psum_spad_size": [16, 24, 32, 40, 48, 64, 80, 96],
+    "sram_size": [45000, 60000, 80000, 108000, 120000, 140000, 180000]
+}
 
 def split_run_name(name):
     """'0_stl' -> ('0', 'stl'); '0' -> ('0', 'baseline')."""
@@ -31,15 +44,19 @@ def seed_sort_key(seed):
     """Numeric seeds sort numerically; anything else sorts after them."""
     return (0, int(seed)) if seed.isdigit() else (1, seed)
 
+class MetricType(Enum):
+    ACCELERATOR = "accelerator_metrics*.csv"
+    SUBACCELERATOR = "subaccelerator_params_metrics*.csv"
 
-def load_datasets(workload, results_root=RESULTS_ROOT):
+
+def load_datasets(metric_type: MetricType, results_root=RESULTS_ROOT):
     """Load accelerator metrics for every seed and optimization variant."""
     # workload_dir = Path(results_root) / f"workload_{workload}"
     workload_dir = Path(results_root)
     datasets = {}
 
     for run_dir in sorted(path for path in workload_dir.iterdir() if path.is_dir()):
-        csv_files = sorted(run_dir.glob("accelerator_metrics*.csv"))
+        csv_files = sorted(run_dir.glob(metric_type.value))
         if not csv_files:
             continue
 
@@ -50,6 +67,28 @@ def load_datasets(workload, results_root=RESULTS_ROOT):
         raise FileNotFoundError(f"No accelerator metrics found in {workload_dir}")
 
     return datasets
+
+def load_dataframe(metric_type: MetricType, results_root=RESULTS_ROOT):
+    """Load accelerator metrics for every seed and optimization variant."""
+    # workload_dir = Path(results_root) / f"workload_{workload}"
+    workload_dir = Path(results_root)
+    dataframes = []
+
+    for run_dir in sorted(path for path in workload_dir.iterdir() if path.is_dir()):
+        csv_files = sorted(run_dir.glob(metric_type.value))
+        if not csv_files:
+            continue
+
+        seed, variant = split_run_name(run_dir.name)
+        df  = pd.read_csv(csv_files[0])
+        df["seed"] = seed
+        df["variant"] = variant
+        dataframes.append(df)
+
+    if not dataframes:
+        raise FileNotFoundError(f"No accelerator metrics found in {workload_dir}")
+
+    return pd.concat(dataframes, ignore_index=True)
 
 
 def best_feasible_edp(metrics):
@@ -572,6 +611,276 @@ def plot_accuracy_vs_edp_change(datasets, workload):
     figure.tight_layout()
     return figure, axis
 
+def param_index(config_param, param_value):
+    return design_space[config_param].index(param_value)
+
+def print_wasserstein(df: DataFrame, accepted_only=False):
+    config_params = ["pe_array_x", "pe_array_y", "sram_size", "ifmap-spad_size", "weights_spad_size", "psum_spad_size"]
+    print(f"is_accepted_only={accepted_only}")
+    if accepted_only:
+        keys = ["seed", "variant", "precision"]
+
+        df = df.sort_values(keys + ["step"]).copy()
+
+        # Mark rejected rows as missing, then forward-fill within each group
+        value_cols = df.columns.difference(keys + ["step", "is_accepted"])
+        accepted = df["is_accepted"].isna() | (df["is_accepted"] == "") | (df["is_accepted"] == True)
+
+        df[value_cols] = (
+            df[value_cols]
+            .where(accepted)
+            .groupby([df[k] for k in keys])
+            .ffill()
+        )
+    print("seed,precision,config_param,distance")
+    for (seed, precision), group in df.groupby(["seed", "precision"]):
+        for config_param in config_params:
+            df[config_param].map(lambda p: param_index(config_param, p))
+            variants = {variant: variant_df[variant_df[config_param].notna()]
+                        for variant, variant_df in group.groupby("variant")}
+            if len(variants) != 2 or variants.get("baseline") is None or variants.get("stl") is None:
+                raise RuntimeError(f"Should be 2 variants per seed, 'baseline' and 'stl', got len={len(variants)}")
+            baseline = variants["baseline"][config_param].map(lambda p: param_index(config_param, p))
+            stl = variants["stl"][config_param].map(lambda p: param_index(config_param, p))
+            distance = wasserstein_distance(
+                baseline,
+                stl
+            )
+            print(f"{seed},{precision},{config_param},{distance}")
+    return
+
+
+
+def plot_pe_occupancy(df: DataFrame, seed: str, precision: int,
+                      partition_size: int = 2):
+    params = ["pe_array_x", "pe_array_y"]
+    group = df.loc[
+        df["seed"].eq(str(seed))
+        & df["precision"].eq(precision)
+        ].copy()
+
+    keys = ["seed", "variant", "precision"]
+    group = group.sort_values(keys + ["step"])
+
+    # Reconstruct post-decision incumbents.
+    accepted = group["is_accepted"].isna() | group["is_accepted"].eq(True)
+
+    group[params] = (
+        group[params]
+        .where(accepted)
+        .groupby([group[k] for k in keys])
+        .ffill()
+    )
+
+    n_options = len(design_space["pe_array_x"])
+    n_regions = math.ceil(n_options / partition_size)
+
+    for param in params:
+        group[param + "_region"] = group[param].map(
+            lambda value: (
+                param_index(param, value) // partition_size
+                if pd.notna(value) else np.nan
+            )
+        )
+
+    occupancy = {}
+    for variant in ("baseline", "stl"):
+        subset = group.loc[group["variant"].eq(variant)]
+        if subset.empty:
+            raise ValueError(f"Missing {variant} data for seed {seed}")
+
+        counts = np.zeros((n_regions, n_regions))
+
+        for _, row in subset.dropna(
+                subset=["pe_array_x_region", "pe_array_y_region"]
+        ).iterrows():
+            x = int(row["pe_array_x_region"])
+            y = int(row["pe_array_y_region"])
+            counts[y, x] += 1
+
+        occupancy[variant] = counts / counts.sum()
+
+    difference = occupancy["stl"] - occupancy["baseline"]
+    limit = max(np.abs(difference).max(), 1e-12)
+
+    figure, axes = plt.subplots(1, 3, figsize=(15, 5))
+
+    vmax = max(matrix.max() for matrix in occupancy.values())
+
+    for axis, variant in zip(axes[:2], ("baseline", "stl")):
+        image = axis.imshow(
+            occupancy[variant],
+            origin="lower",
+            cmap="Blues",
+            vmin=0,
+            vmax=vmax,
+        )
+        axis.set_title(STYLES[variant]["label"])
+
+    image_diff = axes[2].imshow(
+        difference,
+        origin="lower",
+        cmap="RdBu_r",
+        vmin=-limit,
+        vmax=limit,
+    )
+    axes[2].set_title("STL - Baseline")
+
+    for axis in axes:
+        axis.set_xlabel("PE X partition")
+        axis.set_ylabel("PE Y partition")
+        axis.set_xticks(range(n_regions))
+        axis.set_yticks(range(n_regions))
+
+    figure.colorbar(image, ax=axes[:2], shrink=0.75,
+                    label="Occupancy fraction")
+    figure.colorbar(image_diff, ax=axes[2], shrink=0.75,
+                    label="Occupancy difference")
+
+    figure.suptitle(
+        f"Seed {seed}, {precision}-bit PE Array Occupancy"
+    )
+
+    tv = 0.5 * np.abs(
+        occupancy["stl"] - occupancy["baseline"]
+    ).sum()
+    print(f"seed={seed}, total_variation_distance={tv}")
+    return figure, axes
+
+
+def plot_aggregate_pe_occupancy(
+        df: DataFrame,
+        precision: int = 8,
+        partition_size: int = 2,
+):
+    params = ["pe_array_x", "pe_array_y"]
+    keys = ["seed", "variant", "precision"]
+
+    group = df.loc[df["precision"].eq(precision)].copy()
+    group = group.sort_values(keys + ["step"])
+
+    # Reconstruct post-decision incumbent configurations.
+    accepted = (
+            group["is_accepted"].isna()
+            | group["is_accepted"].eq(True)
+    )
+
+    group[params] = (
+        group[params]
+        .where(accepted)
+        .groupby([group[k] for k in keys])
+        .ffill()
+    )
+
+    n_regions = math.ceil(
+        len(design_space["pe_array_x"]) / partition_size
+    )
+
+    for param in params:
+        index_lookup = {
+            value: i for i, value in enumerate(design_space[param])
+        }
+        group[param + "_region"] = (
+                group[param].map(index_lookup) // partition_size
+        )
+
+    # Aggregate normalized occupancy per seed.
+    matrices = {"baseline": [], "stl": []}
+    seed_tvs = []
+
+    for seed, seed_df in group.groupby("seed"):
+        pair = {}
+
+        for variant in ("baseline", "stl"):
+            subset = seed_df.loc[
+                seed_df["variant"].eq(variant)
+            ].dropna(subset=[
+                "pe_array_x_region", "pe_array_y_region"
+            ])
+
+            if subset.empty:
+                raise ValueError(
+                    f"Missing incumbent data: {seed}, {variant}"
+                )
+
+            counts = np.zeros((n_regions, n_regions))
+
+            x = subset["pe_array_x_region"].astype(int)
+            y = subset["pe_array_y_region"].astype(int)
+            np.add.at(counts, (y, x), 1)
+
+            pair[variant] = counts / counts.sum()
+
+        for variant in matrices:
+            matrices[variant].append(pair[variant])
+
+        seed_tvs.append(
+            0.5 * np.abs(
+                pair["stl"] - pair["baseline"]
+            ).sum()
+        )
+
+    occupancy = {
+        variant: np.mean(values, axis=0)
+        for variant, values in matrices.items()
+    }
+
+    difference = occupancy["stl"] - occupancy["baseline"]
+
+    aggregate_tv = 0.5 * np.abs(difference).sum()
+    mean_seed_tv = np.mean(seed_tvs)
+
+    figure, axes = plt.subplots(1, 3, figsize=(15, 5))
+
+    vmax = max(matrix.max() for matrix in occupancy.values())
+    limit = max(np.abs(difference).max(), 1e-12)
+
+    for axis, variant in zip(axes[:2], ("baseline", "stl")):
+        image = axis.imshow(
+            occupancy[variant],
+            origin="lower",
+            cmap="Blues",
+            vmin=0,
+            vmax=vmax,
+        )
+        axis.set_title(STYLES[variant]["label"])
+
+    image_diff = axes[2].imshow(
+        difference,
+        origin="lower",
+        cmap="RdBu_r",
+        vmin=-limit,
+        vmax=limit,
+    )
+    axes[2].set_title("STL - Baseline")
+
+    for axis in axes:
+        axis.set_xlabel("PE X partition")
+        axis.set_ylabel("PE Y partition")
+        axis.set_xticks(range(n_regions))
+        axis.set_yticks(range(n_regions))
+
+    figure.colorbar(
+        image, ax=axes[:2], shrink=0.75,
+        label="Mean occupancy fraction"
+    )
+    figure.colorbar(
+        image_diff, ax=axes[2], shrink=0.75,
+        label="Mean occupancy difference"
+    )
+
+    figure.suptitle(
+        f"{precision}-bit Aggregate PE Array Occupancy "
+        f"({len(seed_tvs)} paired seeds)"
+    )
+
+    print(f"Aggregate TV: {aggregate_tv:.4f}")
+    print(f"Mean per-seed TV: {mean_seed_tv:.4f}")
+
+    return figure, axes
+
+
+
 
 def main():
     parser = argparse.ArgumentParser(
@@ -592,33 +901,63 @@ def main():
 
     args = parser.parse_args()
 
-    datasets = load_datasets(args.workload)
 
-    print_summary_tables(datasets)
-    print_paired_statistical_tests(datasets)
+    accel_datasets = load_datasets(MetricType.ACCELERATOR)
+    left = load_dataframe(MetricType.ACCELERATOR)
+    right = load_dataframe(MetricType.SUBACCELERATOR)
+
+    dataset_keys = ["step", "seed", "variant"]
+    right = right[dataset_keys + right.columns.difference(left.columns).tolist()]
+
+    subaccel_datasets = left.merge(
+        right,
+        on=dataset_keys,
+        how="left",
+        validate="one_to_many"
+    )
+
+    # for seed in ["0", "1337", "6666", "95412", "121254", "4239238", "52911916", "115119111", "512812230"]:
+    #     figure, axes = plot_pe_occupancy(
+    #         subaccel_datasets,
+    #         seed=seed,
+    #         precision=8,
+    #         partition_size=2,
+    #     )
+    figure, axes = plot_aggregate_pe_occupancy(
+        subaccel_datasets,
+        precision=8,
+        partition_size=2,
+    )
+
+    plt.show()
+    return
+
+    print_wasserstein(subaccel_datasets, accepted_only=True)
+    print_summary_tables(accel_datasets)
+    print_paired_statistical_tests(accel_datasets)
 
     figure, _ = plot_best_edp(
-        datasets,
+        accel_datasets,
         args.workload,
     )
 
     aggregate_figure, _ = plot_aggregate_best_edp(
-        datasets,
+        accel_datasets,
         args.workload,
     )
 
     paired_change_figure, _ = plot_paired_edp_change(
-        datasets,
+        accel_datasets,
         args.workload,
     )
 
     paired_convergence_figure, _ = plot_paired_seed_convergence(
-        datasets,
+        accel_datasets,
         args.workload,
     )
 
     accuracy_figure, _ = plot_accuracy_vs_edp_change(
-        datasets,
+        accel_datasets,
         args.workload,
     )
 
