@@ -249,7 +249,7 @@ def plot_aggregate_best_edp(datasets, workload):
         )
 
     axis.set_title(
-        f"Workload {workload.upper()}: Aggregate Best Feasible EDP"
+        f"Workload {workload.upper()}: Aggregate Best Feasible EDP (IQR)"
     )
     axis.set_xlabel("Annealing iteration")
     axis.set_ylabel("Best cumulative EDP")
@@ -282,7 +282,7 @@ def paired_edp_changes(datasets):
     return pivot.reset_index()
 
 
-def paired_log_ratio_tests(datasets):
+def paired_log_ratio_tests_monte_carlo(datasets):
     """Compute paired log-ratio effect sizes and two-sided paired tests.
 
     For each seed, d_i = log(EDP_STL / EDP_Baseline). Negative values favor STL.
@@ -315,6 +315,63 @@ def paired_log_ratio_tests(datasets):
                                 np.abs(permutation_means) >= abs(observed_mean) - 1e-15
                             ) + 1
                     ) / (n_permutations + 1)
+
+    # Wilcoxon signed-rank test on the same paired log ratios.
+    nonzero = log_ratios[~np.isclose(log_ratios, 0.0)]
+    if len(nonzero) == 0:
+        wilcoxon_statistic = 0.0
+        wilcoxon_p = 1.0
+    else:
+        wilcoxon_result = wilcoxon(
+            nonzero,
+            alternative="two-sided",
+            zero_method="wilcox",
+            method="auto",
+        )
+        wilcoxon_statistic = float(wilcoxon_result.statistic)
+        wilcoxon_p = float(wilcoxon_result.pvalue)
+
+    geometric_mean_ratio = math.exp(observed_mean)
+
+    return paired, {
+        "n": len(log_ratios),
+        "mean_log_ratio": observed_mean,
+        "geometric_mean_ratio": geometric_mean_ratio,
+        "geometric_mean_percent_change": 100.0 * (geometric_mean_ratio - 1.0),
+        "median_percent_change": float(paired["percent_change"].median()),
+        "permutation_p_two_sided": permutation_p,
+        "wilcoxon_statistic": wilcoxon_statistic,
+        "wilcoxon_p_two_sided": wilcoxon_p,
+    }
+
+def paired_log_ratio_tests(datasets):
+    """Compute paired log-ratio effect sizes and two-sided paired tests.
+
+    For each seed, d_i = log(EDP_STL / EDP_Baseline). Negative values favor STL.
+    The permutation p-value is exact: for n pairs, all 2**n sign flips are
+    enumerated under the null that treatment labels are exchangeable within pairs.
+    """
+    paired = paired_edp_changes(datasets).copy()
+    paired["log_ratio"] = np.log(paired["ratio"])
+
+    log_ratios = paired["log_ratio"].to_numpy(dtype=float)
+    if len(log_ratios) == 0:
+        raise ValueError("No complete baseline/STL seed pairs were found.")
+
+    observed_mean = float(log_ratios.mean())
+
+    # Exact two-sided paired permutation test using all possible sign flips.
+    permutation_means = np.fromiter(
+        (
+            np.mean(log_ratios * np.asarray(signs))
+            for signs in itertools.product((-1.0, 1.0), repeat=len(log_ratios))
+        ),
+        dtype=float,
+        count=2 ** len(log_ratios),
+    )
+    permutation_p = float(
+        np.mean(np.abs(permutation_means) >= abs(observed_mean) - 1e-15)
+    )
 
     # Wilcoxon signed-rank test on the same paired log ratios.
     nonzero = log_ratios[~np.isclose(log_ratios, 0.0)]
@@ -435,6 +492,15 @@ def plot_paired_edp_change(datasets, workload):
     )
     axis.set_ylabel("Seed")
     axis.grid(True, axis="x", alpha=0.3)
+
+    min_change = paired["percent_change"].min()
+    max_change = paired["percent_change"].max()
+    padding = (max_change - min_change) * 0.10
+
+    axis.set_xlim(
+        min_change - padding,
+        max_change + padding,
+    )
 
     figure.tight_layout()
     return figure, axis
@@ -594,7 +660,7 @@ def plot_accuracy_vs_edp_change(datasets, workload):
 
     axis.set_title(
         f"Workload {workload.upper()}: "
-        "Accuracy-Budget Use vs Best-EDP Change"
+        "Mean Accepted Accuracy Loss vs. Best-EDP Change"
     )
 
     axis.set_xlabel(
@@ -650,8 +716,210 @@ def print_wasserstein(df: DataFrame, accepted_only=False):
     return
 
 
+def plot_regional_ifmap_weights_improvements(
+        df: DataFrame,
+        workload,
+        partition_size: int = 2,
+):
+    params = ["ifmap-spad_size", "weights_spad_size"]
+    precisions = [6, 7, 8]
+    variants = ["baseline", "stl"]
+
+    group = df.copy()
+
+    # Map hardware values to discrete partition indices.
+    for param in params:
+        index_lookup = {
+            value: i
+            for i, value in enumerate(design_space[param])
+        }
+        group[param + "_region"] = (
+                group[param].map(index_lookup) // partition_size
+        )
+
+    n_x_regions = math.ceil(
+        len(design_space["ifmap-spad_size"]) / partition_size
+    )
+    n_y_regions = math.ceil(
+        len(design_space["weights_spad_size"]) / partition_size
+    )
+
+    # Determine new best feasible EDP for each complete
+    # accelerator evaluation, independently per run.
+    evaluations = (
+        group.drop_duplicates(["seed", "variant", "step"])
+        [["seed", "variant", "step", "edp", "evaluation_result"]]
+        .copy()
+        .sort_values(["seed", "variant", "step"])
+    )
+
+    evaluations["edp"] = pd.to_numeric(
+        evaluations["edp"], errors="coerce"
+    )
+
+    feasible = (
+            evaluations["evaluation_result"].eq("Success")
+            & np.isfinite(evaluations["edp"])
+    )
+
+    evaluations["feasible_edp"] = (
+        evaluations["edp"].where(feasible, np.inf)
+    )
+
+    previous_best = (
+        evaluations.groupby(["seed", "variant"])["feasible_edp"]
+        .transform(
+            lambda values: values.cummin().shift(1).fillna(np.inf)
+        )
+    )
+
+    evaluations["is_improvement"] = (
+            feasible
+            & evaluations["edp"].lt(previous_best)
+    )
+
+    group = group.merge(
+        evaluations[
+            ["seed", "variant", "step", "is_improvement"]
+        ],
+        on=["seed", "variant", "step"],
+        how="left",
+        validate="many_to_one",
+    )
+
+    probabilities = {}
+    counts = {}
+
+    for precision in precisions:
+        for variant in variants:
+            subset = group.loc[
+                group["precision"].eq(precision)
+                & group["variant"].eq(variant)
+                ].dropna(subset=[
+                "ifmap-spad_size_region",
+                "weights_spad_size_region",
+            ])
+
+            total = np.zeros((n_y_regions, n_x_regions))
+            improved = np.zeros((n_y_regions, n_x_regions))
+
+            x = subset["ifmap-spad_size_region"].astype(int)
+            y = subset["weights_spad_size_region"].astype(int)
+
+            np.add.at(total, (y, x), 1)
+
+            successful = subset["is_improvement"].eq(True)
+
+            np.add.at(
+                improved,
+                (y[successful], x[successful]),
+                1,
+            )
+
+            probabilities[(precision, variant)] = np.divide(
+                improved,
+                total,
+                out=np.full_like(total, np.nan),
+                where=total > 0,
+            )
+
+            counts[(precision, variant)] = {
+                "total": total,
+                "improved": improved,
+            }
+
+    # Shared color scale across precision levels and variants.
+    finite_maxima = [
+        np.nanmax(matrix)
+        for matrix in probabilities.values()
+        if np.isfinite(matrix).any()
+    ]
+    vmax = max(finite_maxima, default=1.0)
+
+    figure, axes = plt.subplots(
+        3, 2,
+        figsize=(11, 14),
+        sharex=True,
+        sharey=True,
+        constrained_layout=True,
+    )
+
+    cmap = plt.get_cmap("viridis").copy()
+    cmap.set_bad("lightgray")
+
+    for row, precision in enumerate(precisions):
+        for col, variant in enumerate(variants):
+            axis = axes[row, col]
+            matrix = probabilities[(precision, variant)]
+
+            image = axis.imshow(
+                matrix,
+                origin="lower",
+                cmap=cmap,
+                vmin=0,
+                vmax=vmax,
+            )
+
+            axis.set_title(
+                f"{precision}-bit {STYLES[variant]['label']}"
+            )
+            axis.set_xlabel("IFMAP SPAD partition")
+            axis.set_ylabel("Weights SPAD partition")
+            axis.set_xticks(range(n_x_regions))
+            axis.set_yticks(range(n_y_regions))
+
+            # Annotate improvements / total evaluations.
+            for y in range(n_y_regions):
+                for x in range(n_x_regions):
+                    total = int(
+                        counts[(precision, variant)]["total"][y, x]
+                    )
+                    improved = int(
+                        counts[(precision, variant)]["improved"][y, x]
+                    )
+
+                    if total:
+                        rgba = cmap(matrix[y, x] / vmax)
+                        r, g, b = rgba[:3]
+
+                        # Relative luminance (WCAG)
+                        def linearize(c):
+                            return c / 12.92 if c <= 0.04045 else ((c + 0.055) / 1.055) ** 2.4
+
+                        luminance = (
+                                0.2126 * linearize(r)
+                                + 0.7152 * linearize(g)
+                                + 0.0722 * linearize(b)
+                        )
+
+                        axis.text(
+                            x, y, f"{improved}/{total}",
+                            ha="center",
+                            va="center",
+                            fontsize=9,
+                            fontweight="bold",
+                            color="black" if luminance > 0.179 else "white",
+                        )
+
+    figure.colorbar(
+        image,
+        ax=axes,
+        shrink=0.65,
+        label="Probability of new best feasible EDP",
+    )
+
+    figure.suptitle(
+        f"Workload {workload}: Regional EDP Improvement Frequency: "
+        "IFMAP × Weights",
+        fontsize=15,
+    )
+
+    return figure, axes
+
+
 def plot_regional_edp_improvements(
         df: DataFrame,
+        workload,
         partition_size: int = 2,
 ):
     params = ["pe_array_x", "pe_array_y"]
@@ -806,14 +1074,26 @@ def plot_regional_edp_improvements(
                     improved = int(counts[(precision, variant)]["improved"][y, x])
 
                     if total:
+                        rgba = cmap(matrix[y, x] / vmax)
+                        r, g, b = rgba[:3]
+
+                        # Relative luminance (WCAG)
+                        def linearize(c):
+                            return c / 12.92 if c <= 0.04045 else ((c + 0.055) / 1.055) ** 2.4
+
+                        luminance = (
+                                0.2126 * linearize(r)
+                                + 0.7152 * linearize(g)
+                                + 0.0722 * linearize(b)
+                        )
+
                         axis.text(
                             x, y, f"{improved}/{total}",
                             ha="center",
                             va="center",
-                            fontsize=8,
-                            color="white"
-                            if matrix[y, x] > vmax * 0.5
-                            else "black",
+                            fontsize=9,
+                            fontweight="bold",
+                            color="black" if luminance > 0.179 else "white",
                         )
 
     figure.colorbar(
@@ -824,7 +1104,208 @@ def plot_regional_edp_improvements(
     )
 
     figure.suptitle(
-        "Regional EDP Improvement Frequency",
+        f"Workload {workload}: Regional EDP Improvement Frequency",
+        fontsize=15,
+    )
+
+    return figure, axes
+
+
+def plot_regional_psum_sram_improvements(
+        df: DataFrame,
+        workload,
+        partition_size: int = 2,
+):
+    params = ["psum_spad_size", "sram_size"]
+    precisions = [6, 7, 8]
+    variants = ["baseline", "stl"]
+
+    group = df.copy()
+
+    # Map hardware values to discrete partition indices.
+    for param in params:
+        index_lookup = {
+            value: i
+            for i, value in enumerate(design_space[param])
+        }
+        group[param + "_region"] = (
+                group[param].map(index_lookup) // partition_size
+        )
+
+    n_x_regions = math.ceil(
+        len(design_space["psum_spad_size"]) / partition_size
+    )
+    n_y_regions = math.ceil(
+        len(design_space["sram_size"]) / partition_size
+    )
+
+    # Identify new best feasible EDP records per complete
+    # accelerator evaluation, independently for each run.
+    evaluations = (
+        group.drop_duplicates(["seed", "variant", "step"])
+        [["seed", "variant", "step", "edp", "evaluation_result"]]
+        .copy()
+        .sort_values(["seed", "variant", "step"])
+    )
+
+    evaluations["edp"] = pd.to_numeric(
+        evaluations["edp"], errors="coerce"
+    )
+
+    feasible = (
+            evaluations["evaluation_result"].eq("Success")
+            & np.isfinite(evaluations["edp"])
+    )
+
+    evaluations["feasible_edp"] = (
+        evaluations["edp"].where(feasible, np.inf)
+    )
+
+    previous_best = (
+        evaluations.groupby(["seed", "variant"])["feasible_edp"]
+        .transform(
+            lambda values: values.cummin().shift(1).fillna(np.inf)
+        )
+    )
+
+    evaluations["is_improvement"] = (
+            feasible
+            & evaluations["edp"].lt(previous_best)
+    )
+
+    # Attach system-level improvement flags to subaccelerators.
+    group = group.merge(
+        evaluations[
+            ["seed", "variant", "step", "is_improvement"]
+        ],
+        on=["seed", "variant", "step"],
+        how="left",
+        validate="many_to_one",
+    )
+
+    probabilities = {}
+    counts = {}
+
+    for precision in precisions:
+        for variant in variants:
+            subset = group.loc[
+                group["precision"].eq(precision)
+                & group["variant"].eq(variant)
+                ].dropna(subset=[
+                "psum_spad_size_region",
+                "sram_size_region",
+            ])
+
+            total = np.zeros((n_y_regions, n_x_regions))
+            improved = np.zeros((n_y_regions, n_x_regions))
+
+            x = subset["psum_spad_size_region"].astype(int)
+            y = subset["sram_size_region"].astype(int)
+
+            np.add.at(total, (y, x), 1)
+
+            successful = subset["is_improvement"].eq(True)
+
+            np.add.at(
+                improved,
+                (y[successful], x[successful]),
+                1,
+            )
+
+            probabilities[(precision, variant)] = np.divide(
+                improved,
+                total,
+                out=np.full_like(total, np.nan),
+                where=total > 0,
+            )
+
+            counts[(precision, variant)] = {
+                "total": total,
+                "improved": improved,
+            }
+
+    # Shared scale across all six heatmaps.
+    finite_maxima = [
+        np.nanmax(matrix)
+        for matrix in probabilities.values()
+        if np.isfinite(matrix).any()
+    ]
+    vmax = max(finite_maxima, default=1.0)
+
+    figure, axes = plt.subplots(
+        3, 2,
+        figsize=(11, 14),
+        sharex=True,
+        sharey=True,
+        constrained_layout=True,
+    )
+
+    cmap = plt.get_cmap("viridis").copy()
+    cmap.set_bad("lightgray")
+
+    for row, precision in enumerate(precisions):
+        for col, variant in enumerate(variants):
+            axis = axes[row, col]
+            matrix = probabilities[(precision, variant)]
+
+            image = axis.imshow(
+                matrix,
+                origin="lower",
+                cmap=cmap,
+                vmin=0,
+                vmax=vmax,
+            )
+
+            axis.set_title(
+                f"{precision}-bit {STYLES[variant]['label']}"
+            )
+            axis.set_xlabel("PSUM SPAD partition")
+            axis.set_ylabel("SRAM partition")
+            axis.set_xticks(range(n_x_regions))
+            axis.set_yticks(range(n_y_regions))
+
+            # Annotate new best EDP records / total evaluations.
+            for y in range(n_y_regions):
+                for x in range(n_x_regions):
+                    total = int(
+                        counts[(precision, variant)]["total"][y, x]
+                    )
+                    improved = int(
+                        counts[(precision, variant)]["improved"][y, x]
+                    )
+
+                    if total:
+                        rgba = cmap(matrix[y, x] / vmax)
+                        r, g, b = rgba[:3]
+
+                        # Relative luminance (WCAG)
+                        def linearize(c):
+                            return c / 12.92 if c <= 0.04045 else ((c + 0.055) / 1.055) ** 2.4
+
+                        luminance = (
+                                0.2126 * linearize(r)
+                                + 0.7152 * linearize(g)
+                                + 0.0722 * linearize(b)
+                        )
+
+                        axis.text(
+                            x, y, f"{improved}/{total}",
+                            ha="center",
+                            va="center",
+                            fontsize=9,
+                            fontweight="bold",
+                            color="black" if luminance > 0.179 else "white",
+                        )
+
+    figure.colorbar(
+        image,
+        ax=axes,
+        shrink=0.65,
+        label="Probability of new best feasible EDP",
+    )
+
+    figure.suptitle(
+        f"Workload {workload}: Regional EDP Improvement Frequency: PSUM × SRAM",
         fontsize=15,
     )
 
@@ -928,18 +1409,20 @@ def plot_pe_occupancy(df: DataFrame, seed: str, precision: int,
     return figure, axes
 
 
+
 def plot_aggregate_pe_occupancy(
         df: DataFrame,
-        precision: int = 8,
+        workload,
         partition_size: int = 2,
 ):
     params = ["pe_array_x", "pe_array_y"]
     keys = ["seed", "variant", "precision"]
+    precisions = [6, 7, 8]
 
-    group = df.loc[df["precision"].eq(precision)].copy()
+    group = df.copy()
     group = group.sort_values(keys + ["step"])
 
-    # Reconstruct post-decision incumbent configurations.
+    # Reconstruct post-decision incumbents.
     accepted = (
             group["is_accepted"].isna()
             | group["is_accepted"].eq(True)
@@ -958,113 +1441,597 @@ def plot_aggregate_pe_occupancy(
 
     for param in params:
         index_lookup = {
+            value: i
+            for i, value in enumerate(design_space[param])
+        }
+        group[param + "_region"] = (
+                group[param].map(index_lookup) // partition_size
+        )
+
+    occupancies = {}
+    differences = {}
+    statistics = {}
+
+    for precision in precisions:
+        precision_df = group.loc[
+            group["precision"].eq(precision)
+        ]
+
+        matrices = {"baseline": [], "stl": []}
+        seed_tvs = []
+
+        for seed, seed_df in precision_df.groupby("seed"):
+            pair = {}
+
+            for variant in ("baseline", "stl"):
+                subset = seed_df.loc[
+                    seed_df["variant"].eq(variant)
+                ].dropna(subset=[
+                    "pe_array_x_region",
+                    "pe_array_y_region",
+                ])
+
+                if subset.empty:
+                    raise ValueError(
+                        f"Missing incumbent data: "
+                        f"{seed}, {variant}, {precision}-bit"
+                    )
+
+                counts = np.zeros((n_regions, n_regions))
+
+                x = subset["pe_array_x_region"].astype(int)
+                y = subset["pe_array_y_region"].astype(int)
+
+                np.add.at(counts, (y, x), 1)
+
+                pair[variant] = counts / counts.sum()
+
+            for variant in matrices:
+                matrices[variant].append(pair[variant])
+
+            seed_tvs.append(
+                0.5 * np.abs(
+                    pair["stl"] - pair["baseline"]
+                ).sum()
+            )
+            # Baseline-vs-baseline TV across all unique seed pairs.
+        baseline_matrices = matrices["baseline"]
+
+        baseline_tvs = [
+            0.5 * np.abs(a - b).sum()
+            for a, b in itertools.combinations(baseline_matrices, 2)
+        ]
+
+        mean_baseline_tv = np.mean(baseline_tvs)
+
+        occupancy = {
+            variant: np.mean(values, axis=0)
+            for variant, values in matrices.items()
+        }
+
+        difference = (
+                occupancy["stl"] - occupancy["baseline"]
+        )
+
+        occupancies[precision] = occupancy
+        differences[precision] = difference
+
+        statistics[precision] = {
+            "aggregate_tv": 0.5 * np.abs(difference).sum(),
+            "mean_seed_tv": np.mean(seed_tvs),
+            "mean_baseline_tv": mean_baseline_tv,
+            "n_seeds": len(seed_tvs),
+            "n_baseline_pairs": len(baseline_tvs),
+        }
+
+    # Shared scales across all precision levels.
+    vmax = max(
+        matrix.max()
+        for occupancy in occupancies.values()
+        for matrix in occupancy.values()
+    )
+
+    limit = max(
+        max(np.abs(matrix).max() for matrix in differences.values()),
+        1e-12,
+    )
+
+    figure, axes = plt.subplots(
+        3, 3,
+        figsize=(15, 14),
+        sharex=True,
+        sharey=True,
+        constrained_layout=True,
+    )
+
+    for row, precision in enumerate(precisions):
+        occupancy = occupancies[precision]
+
+        for col, variant in enumerate(("baseline", "stl")):
+            axis = axes[row, col]
+
+            image = axis.imshow(
+                occupancy[variant],
+                origin="lower",
+                cmap="Blues",
+                vmin=0,
+                vmax=vmax,
+            )
+
+            axis.set_title(
+                f"{precision}-bit {STYLES[variant]['label']}"
+            )
+
+        axis = axes[row, 2]
+
+        image_diff = axis.imshow(
+            differences[precision],
+            origin="lower",
+            cmap="RdBu_r",
+            vmin=-limit,
+            vmax=limit,
+        )
+
+        axis.set_title(
+            f"{precision}-bit STL - Baseline"
+        )
+
+        for axis in axes[row]:
+            axis.set_xlabel("PE X partition")
+            axis.set_ylabel("PE Y partition")
+            axis.set_xticks(range(n_regions))
+            axis.set_yticks(range(n_regions))
+
+    figure.colorbar(
+        image,
+        ax=axes[:, :2],
+        shrink=0.65,
+        label="Mean occupancy fraction",
+    )
+
+    figure.colorbar(
+        image_diff,
+        ax=axes[:, 2],
+        shrink=0.65,
+        label="Mean occupancy difference",
+    )
+
+    figure.suptitle(
+        f"Workload {workload}: Aggregate PE Array Occupancy",
+        fontsize=15,
+    )
+
+    print("\nAggregate PE Array Occupancy:")
+    print(
+        "precision,aggregate_tv,mean_seed_tv,"
+        "mean_baseline_tv,n_seeds,n_baseline_pairs"
+    )
+
+    for precision, stats in statistics.items():
+        print(
+            f"{precision},"
+            f"{stats['aggregate_tv']:.4f},"
+            f"{stats['mean_seed_tv']:.4f},"
+            f"{stats['mean_baseline_tv']:.4f},"
+            f"{stats['n_seeds']},"
+            f"{stats['n_baseline_pairs']}"
+        )
+
+    return figure, axes
+
+
+def plot_aggregate_ifmap_weights_occupancy(
+        df: DataFrame,
+        workload,
+        partition_size: int = 2,
+):
+    params = ["ifmap-spad_size", "weights_spad_size"]
+    x_param, y_param = params
+    keys = ["seed", "variant", "precision"]
+    precisions = [6, 7, 8]
+
+    group = df.sort_values(keys + ["step"]).copy()
+
+    # Reconstruct post-decision incumbents.
+    accepted = (
+            group["is_accepted"].isna()
+            | group["is_accepted"].eq(True)
+    )
+
+    group[params] = (
+        group[params]
+        .where(accepted)
+        .groupby([group[k] for k in keys])
+        .ffill()
+    )
+
+    n_x_regions = math.ceil(
+        len(design_space[x_param]) / partition_size
+    )
+    n_y_regions = math.ceil(
+        len(design_space[y_param]) / partition_size
+    )
+
+    for param in params:
+        index_lookup = {
             value: i for i, value in enumerate(design_space[param])
         }
         group[param + "_region"] = (
                 group[param].map(index_lookup) // partition_size
         )
 
-    # Aggregate normalized occupancy per seed.
-    matrices = {"baseline": [], "stl": []}
-    seed_tvs = []
+    occupancies = {}
+    differences = {}
+    statistics = {}
 
-    for seed, seed_df in group.groupby("seed"):
-        pair = {}
+    for precision in precisions:
+        precision_df = group.loc[
+            group["precision"].eq(precision)
+        ]
 
-        for variant in ("baseline", "stl"):
-            subset = seed_df.loc[
-                seed_df["variant"].eq(variant)
-            ].dropna(subset=[
-                "pe_array_x_region", "pe_array_y_region"
-            ])
+        matrices = {"baseline": [], "stl": []}
+        seed_tvs = []
 
-            if subset.empty:
-                raise ValueError(
-                    f"Missing incumbent data: {seed}, {variant}"
-                )
+        for seed, seed_df in precision_df.groupby("seed"):
+            pair = {}
 
-            counts = np.zeros((n_regions, n_regions))
+            for variant in ("baseline", "stl"):
+                subset = seed_df.loc[
+                    seed_df["variant"].eq(variant)
+                ].dropna(subset=[
+                    x_param + "_region",
+                    y_param + "_region",
+                    ])
 
-            x = subset["pe_array_x_region"].astype(int)
-            y = subset["pe_array_y_region"].astype(int)
-            np.add.at(counts, (y, x), 1)
+                if subset.empty:
+                    raise ValueError(
+                        f"Missing incumbent data: "
+                        f"{seed}, {variant}, {precision}-bit"
+                    )
 
-            pair[variant] = counts / counts.sum()
+                counts = np.zeros((n_y_regions, n_x_regions))
 
-        for variant in matrices:
-            matrices[variant].append(pair[variant])
+                x = subset[x_param + "_region"].astype(int)
+                y = subset[y_param + "_region"].astype(int)
 
-        seed_tvs.append(
-            0.5 * np.abs(
-                pair["stl"] - pair["baseline"]
-            ).sum()
-        )
+                np.add.at(counts, (y, x), 1)
+                pair[variant] = counts / counts.sum()
 
-    occupancy = {
-        variant: np.mean(values, axis=0)
-        for variant, values in matrices.items()
-    }
+            for variant in matrices:
+                matrices[variant].append(pair[variant])
 
-    difference = occupancy["stl"] - occupancy["baseline"]
+            seed_tvs.append(
+                0.5 * np.abs(
+                    pair["stl"] - pair["baseline"]
+                ).sum()
+            )
 
-    aggregate_tv = 0.5 * np.abs(difference).sum()
-    mean_seed_tv = np.mean(seed_tvs)
+        occupancy = {
+            variant: np.mean(values, axis=0)
+            for variant, values in matrices.items()
+        }
 
-    figure, axes = plt.subplots(1, 3, figsize=(15, 5))
+        difference = occupancy["stl"] - occupancy["baseline"]
 
-    vmax = max(matrix.max() for matrix in occupancy.values())
-    limit = max(np.abs(difference).max(), 1e-12)
+        baseline_tvs = [
+            0.5 * np.abs(a - b).sum()
+            for a, b in itertools.combinations(
+                matrices["baseline"], 2
+            )
+        ]
 
-    for axis, variant in zip(axes[:2], ("baseline", "stl")):
-        image = axis.imshow(
-            occupancy[variant],
+        occupancies[precision] = occupancy
+        differences[precision] = difference
+
+        statistics[precision] = {
+            "aggregate_tv": 0.5 * np.abs(difference).sum(),
+            "mean_seed_tv": np.mean(seed_tvs),
+            "mean_baseline_tv": np.mean(baseline_tvs),
+            "n_seeds": len(seed_tvs),
+            "n_baseline_pairs": len(baseline_tvs),
+        }
+
+    vmax = max(
+        matrix.max()
+        for occupancy in occupancies.values()
+        for matrix in occupancy.values()
+    )
+
+    limit = max(
+        max(np.abs(matrix).max() for matrix in differences.values()),
+        1e-12,
+    )
+
+    figure, axes = plt.subplots(
+        3, 3,
+        figsize=(15, 14),
+        sharex=True,
+        sharey=True,
+        constrained_layout=True,
+    )
+
+    for row, precision in enumerate(precisions):
+        occupancy = occupancies[precision]
+
+        for col, variant in enumerate(("baseline", "stl")):
+            axis = axes[row, col]
+
+            image = axis.imshow(
+                occupancy[variant],
+                origin="lower",
+                cmap="Blues",
+                vmin=0,
+                vmax=vmax,
+            )
+
+            axis.set_title(
+                f"{precision}-bit {STYLES[variant]['label']}"
+            )
+
+        axis = axes[row, 2]
+
+        image_diff = axis.imshow(
+            differences[precision],
             origin="lower",
-            cmap="Blues",
-            vmin=0,
-            vmax=vmax,
+            cmap="RdBu_r",
+            vmin=-limit,
+            vmax=limit,
         )
-        axis.set_title(STYLES[variant]["label"])
 
-    image_diff = axes[2].imshow(
-        difference,
-        origin="lower",
-        cmap="RdBu_r",
-        vmin=-limit,
-        vmax=limit,
-    )
-    axes[2].set_title("STL - Baseline")
+        axis.set_title(f"{precision}-bit STL - Baseline")
 
-    for axis in axes:
-        axis.set_xlabel("PE X partition")
-        axis.set_ylabel("PE Y partition")
-        axis.set_xticks(range(n_regions))
-        axis.set_yticks(range(n_regions))
+        for axis in axes[row]:
+            axis.set_xlabel("IFMAP SPAD partition")
+            axis.set_ylabel("Weights SPAD partition")
+            axis.set_xticks(range(n_x_regions))
+            axis.set_yticks(range(n_y_regions))
 
     figure.colorbar(
-        image, ax=axes[:2], shrink=0.75,
-        label="Mean occupancy fraction"
+        image,
+        ax=axes[:, :2],
+        shrink=0.65,
+        label="Mean occupancy fraction",
     )
+
     figure.colorbar(
-        image_diff, ax=axes[2], shrink=0.75,
-        label="Mean occupancy difference"
+        image_diff,
+        ax=axes[:, 2],
+        shrink=0.65,
+        label="Mean occupancy difference",
     )
 
     figure.suptitle(
-        f"{precision}-bit Aggregate PE Array Occupancy "
-        f"({len(seed_tvs)} paired seeds)"
+        f"Workload {workload}: Aggregate IFMAP × Weights SPAD Occupancy",
+        fontsize=15,
     )
 
-    print(f"Aggregate TV: {aggregate_tv:.4f}")
-    print(f"Mean per-seed TV: {mean_seed_tv:.4f}")
+    print("\nAggregate IFMAP × Weights Occupancy:")
+    print(
+        "precision,aggregate_tv,mean_seed_tv,"
+        "mean_baseline_tv,n_seeds,n_baseline_pairs"
+    )
+
+    for precision, stats in statistics.items():
+        print(
+            f"{precision},"
+            f"{stats['aggregate_tv']:.4f},"
+            f"{stats['mean_seed_tv']:.4f},"
+            f"{stats['mean_baseline_tv']:.4f},"
+            f"{stats['n_seeds']},"
+            f"{stats['n_baseline_pairs']}"
+        )
+
+    return figure, axes
+
+
+def plot_aggregate_psum_sram_occupancy(
+        df: DataFrame,
+        workload,
+        partition_size: int = 2,
+):
+    params = ["psum_spad_size", "sram_size"]
+    x_param, y_param = params
+    keys = ["seed", "variant", "precision"]
+    precisions = [6, 7, 8]
+
+    group = df.sort_values(keys + ["step"]).copy()
+
+    # Reconstruct post-decision incumbents.
+    accepted = (
+            group["is_accepted"].isna()
+            | group["is_accepted"].eq(True)
+    )
+
+    group[params] = (
+        group[params]
+        .where(accepted)
+        .groupby([group[k] for k in keys])
+        .ffill()
+    )
+
+    n_x_regions = math.ceil(
+        len(design_space[x_param]) / partition_size
+    )
+    n_y_regions = math.ceil(
+        len(design_space[y_param]) / partition_size
+    )
+
+    for param in params:
+        index_lookup = {
+            value: i for i, value in enumerate(design_space[param])
+        }
+        group[param + "_region"] = (
+                group[param].map(index_lookup) // partition_size
+        )
+
+    occupancies = {}
+    differences = {}
+    statistics = {}
+
+    for precision in precisions:
+        precision_df = group.loc[
+            group["precision"].eq(precision)
+        ]
+
+        matrices = {"baseline": [], "stl": []}
+        seed_tvs = []
+
+        for seed, seed_df in precision_df.groupby("seed"):
+            pair = {}
+
+            for variant in ("baseline", "stl"):
+                subset = seed_df.loc[
+                    seed_df["variant"].eq(variant)
+                ].dropna(subset=[
+                    x_param + "_region",
+                    y_param + "_region",
+                    ])
+
+                if subset.empty:
+                    raise ValueError(
+                        f"Missing incumbent data: "
+                        f"{seed}, {variant}, {precision}-bit"
+                    )
+
+                counts = np.zeros((n_y_regions, n_x_regions))
+
+                x = subset[x_param + "_region"].astype(int)
+                y = subset[y_param + "_region"].astype(int)
+
+                np.add.at(counts, (y, x), 1)
+                pair[variant] = counts / counts.sum()
+
+            for variant in matrices:
+                matrices[variant].append(pair[variant])
+
+            seed_tvs.append(
+                0.5 * np.abs(
+                    pair["stl"] - pair["baseline"]
+                ).sum()
+            )
+
+        occupancy = {
+            variant: np.mean(values, axis=0)
+            for variant, values in matrices.items()
+        }
+
+        difference = occupancy["stl"] - occupancy["baseline"]
+
+        baseline_tvs = [
+            0.5 * np.abs(a - b).sum()
+            for a, b in itertools.combinations(
+                matrices["baseline"], 2
+            )
+        ]
+
+        occupancies[precision] = occupancy
+        differences[precision] = difference
+
+        statistics[precision] = {
+            "aggregate_tv": 0.5 * np.abs(difference).sum(),
+            "mean_seed_tv": np.mean(seed_tvs),
+            "mean_baseline_tv": np.mean(baseline_tvs),
+            "n_seeds": len(seed_tvs),
+            "n_baseline_pairs": len(baseline_tvs),
+        }
+
+    vmax = max(
+        matrix.max()
+        for occupancy in occupancies.values()
+        for matrix in occupancy.values()
+    )
+
+    limit = max(
+        max(np.abs(matrix).max() for matrix in differences.values()),
+        1e-12,
+    )
+
+    figure, axes = plt.subplots(
+        3, 3,
+        figsize=(15, 14),
+        sharex=True,
+        sharey=True,
+        constrained_layout=True,
+    )
+
+    for row, precision in enumerate(precisions):
+        occupancy = occupancies[precision]
+
+        for col, variant in enumerate(("baseline", "stl")):
+            axis = axes[row, col]
+
+            image = axis.imshow(
+                occupancy[variant],
+                origin="lower",
+                cmap="Blues",
+                vmin=0,
+                vmax=vmax,
+            )
+
+            axis.set_title(
+                f"{precision}-bit {STYLES[variant]['label']}"
+            )
+
+        axis = axes[row, 2]
+
+        image_diff = axis.imshow(
+            differences[precision],
+            origin="lower",
+            cmap="RdBu_r",
+            vmin=-limit,
+            vmax=limit,
+        )
+
+        axis.set_title(f"{precision}-bit STL - Baseline")
+
+        for axis in axes[row]:
+            axis.set_xlabel("PSUM SPAD partition")
+            axis.set_ylabel("SRAM partition")
+            axis.set_xticks(range(n_x_regions))
+            axis.set_yticks(range(n_y_regions))
+
+    figure.colorbar(
+        image,
+        ax=axes[:, :2],
+        shrink=0.65,
+        label="Mean occupancy fraction",
+    )
+
+    figure.colorbar(
+        image_diff,
+        ax=axes[:, 2],
+        shrink=0.65,
+        label="Mean occupancy difference",
+    )
+
+    figure.suptitle(
+        f"Workload {workload}: Aggregate PSUM SPAD × SRAM Occupancy",
+        fontsize=15,
+    )
+
+    print("\nAggregate PSUM × SRAM Occupancy:")
+    print(
+        "precision,aggregate_tv,mean_seed_tv,"
+        "mean_baseline_tv,n_seeds,n_baseline_pairs"
+    )
+
+    for precision, stats in statistics.items():
+        print(
+            f"{precision},"
+            f"{stats['aggregate_tv']:.4f},"
+            f"{stats['mean_seed_tv']:.4f},"
+            f"{stats['mean_baseline_tv']:.4f},"
+            f"{stats['n_seeds']},"
+            f"{stats['n_baseline_pairs']}"
+        )
 
     return figure, axes
 
 
 
-
 def main():
     parser = argparse.ArgumentParser(
-        description="Plot cumulative best EDP results."
+        description="Analyze and plot accelerator optimization results."
     )
 
     parser.add_argument(
@@ -1076,114 +2043,161 @@ def main():
     parser.add_argument(
         "--output",
         type=Path,
-        help="Save the plots instead of displaying them.",
+        help="Base output filename for saving all plots instead of displaying them.",
     )
 
     args = parser.parse_args()
+    workload = args.workload
 
+    # Load datasets.
+    results_root = (
+            REPO_ROOT
+            / "corrected_seed_pairs_multiplicative_continuous_frozen"
+            / f"workload_{workload}"
+    )
 
-    accel_datasets = load_datasets(MetricType.ACCELERATOR)
-    left = load_dataframe(MetricType.ACCELERATOR)
-    right = load_dataframe(MetricType.SUBACCELERATOR)
+    accel_datasets = load_datasets(
+        MetricType.ACCELERATOR,
+        results_root=results_root,
+    )
+
+    left = load_dataframe(
+        MetricType.ACCELERATOR,
+        results_root=results_root,
+    )
+
+    right = load_dataframe(
+        MetricType.SUBACCELERATOR,
+        results_root=results_root,
+    )
 
     dataset_keys = ["step", "seed", "variant"]
-    right = right[dataset_keys + right.columns.difference(left.columns).tolist()]
+
+    right = right[
+        dataset_keys
+        + right.columns.difference(left.columns).tolist()
+        ]
 
     subaccel_datasets = left.merge(
         right,
         on=dataset_keys,
         how="left",
-        validate="one_to_many"
+        validate="one_to_many",
     )
 
-    # for seed in ["0", "1337", "6666", "95412", "121254", "4239238", "52911916", "115119111", "512812230"]:
-    #     figure, axes = plot_pe_occupancy(
-    #         subaccel_datasets,
-    #         seed=seed,
-    #         precision=8,
-    #         partition_size=2,
-    #     )
-    # figure, axes = plot_aggregate_pe_occupancy(
-    #     subaccel_datasets,
-    #     precision=8,
-    #     partition_size=2,
-    # )
-    figure, axes = plot_regional_edp_improvements(
-        subaccel_datasets,
-        partition_size=2,
-    )
-
-    plt.show()
-    return
-
+    # Print statistical summaries.
     print_wasserstein(subaccel_datasets, accepted_only=True)
     print_summary_tables(accel_datasets)
     print_paired_statistical_tests(accel_datasets)
 
-    figure, _ = plot_best_edp(
-        accel_datasets,
-        args.workload,
+    # Collect figures for display or saving.
+    figures = {}
+
+    # Optimization effectiveness.
+    # figures["best_edp"] = plot_best_edp(
+    #     accel_datasets, args.workload
+    # )[0]
+
+    figures["aggregate_best_edp"] = plot_aggregate_best_edp(
+        accel_datasets, args.workload
+    )[0]
+
+    figures["paired_edp_change"] = plot_paired_edp_change(
+        accel_datasets, args.workload
+    )[0]
+
+    figures["paired_convergence"] = plot_paired_seed_convergence(
+        accel_datasets, args.workload
+    )[0]
+
+    figures["accuracy_vs_edp"] = plot_accuracy_vs_edp_change(
+        accel_datasets, args.workload
+    )[0]
+
+    # Aggregate regional occupancy.
+    figures["occupancy_pe"] = plot_aggregate_pe_occupancy(
+        subaccel_datasets,
+        workload.upper(),
+        partition_size=2,
+    )[0]
+
+    figures["occupancy_ifmap_weights"] = (
+        plot_aggregate_ifmap_weights_occupancy(
+            subaccel_datasets,
+            workload.upper(),
+            partition_size=2,
+        )[0]
     )
 
-    aggregate_figure, _ = plot_aggregate_best_edp(
-        accel_datasets,
-        args.workload,
+    figures["occupancy_psum_sram"] = (
+        plot_aggregate_psum_sram_occupancy(
+            subaccel_datasets,
+            workload.upper(),
+            partition_size=2,
+        )[0]
     )
 
-    paired_change_figure, _ = plot_paired_edp_change(
-        accel_datasets,
-        args.workload,
+    # Regional EDP improvement frequency.
+    figures["improvements_pe"] = plot_regional_edp_improvements(
+        subaccel_datasets,
+        workload.upper(),
+        partition_size=2,
+    )[0]
+
+    figures["improvements_ifmap_weights"] = (
+        plot_regional_ifmap_weights_improvements(
+            subaccel_datasets,
+            workload.upper(),
+            partition_size=2,
+        )[0]
     )
 
-    paired_convergence_figure, _ = plot_paired_seed_convergence(
-        accel_datasets,
-        args.workload,
+    figures["improvements_psum_sram"] = (
+        plot_regional_psum_sram_improvements(
+            subaccel_datasets,
+            workload.upper(),
+            partition_size=2,
+        )[0]
     )
 
-    accuracy_figure, _ = plot_accuracy_vs_edp_change(
-        accel_datasets,
-        args.workload,
+    # Individual seed PE occupancy.
+    seeds = sorted(
+        subaccel_datasets["seed"].unique(),
+        key=seed_sort_key,
     )
 
+    # for seed in seeds:
+    #     for precision in (6, 7, 8):
+    #         figures[f"occupancy_pe_seed_{seed}_{precision}bit"] = (
+    #             plot_pe_occupancy(
+    #                 subaccel_datasets,
+    #                 seed=seed,
+    #                 precision=precision,
+    #                 partition_size=2,
+    #             )[0]
+    #         )
+    # Save or display all figures.
     if args.output:
-        figure.savefig(
-            args.output,
-            dpi=300,
-            bbox_inches="tight",
+        args.output.parent.mkdir(
+            parents=True,
+            exist_ok=True,
         )
 
-        aggregate_figure.savefig(
-            args.output.with_name(
-                f"{args.output.stem}_aggregate{args.output.suffix}"
-            ),
-            dpi=300,
-            bbox_inches="tight",
-        )
+        for name, figure in figures.items():
+            path = args.output.with_name(
+                f"{args.output.stem}_{name}{args.output.suffix}"
+            )
 
-        paired_change_figure.savefig(
-            args.output.with_name(
-                f"{args.output.stem}_paired_change{args.output.suffix}"
-            ),
-            dpi=300,
-            bbox_inches="tight",
-        )
+            figure.savefig(
+                path,
+                dpi=300,
+                bbox_inches="tight",
+            )
 
-        paired_convergence_figure.savefig(
-            args.output.with_name(
-                f"{args.output.stem}_paired_convergence{args.output.suffix}"
-            ),
-            dpi=300,
-            bbox_inches="tight",
-        )
+            print(f"Saved: {path}")
+            plt.close(figure)
 
-        accuracy_figure.savefig(
-            args.output.with_name(
-                f"{args.output.stem}_accuracy_vs_edp{args.output.suffix}"
-            ),
-            dpi=300,
-            bbox_inches="tight",
-        )
-
+        print(f"\nSaved {len(figures)} figures.")
     else:
         plt.show()
 

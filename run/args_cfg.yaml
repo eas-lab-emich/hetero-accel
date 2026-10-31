@@ -8,15 +8,15 @@ app_args:
   run_baseline: True
   seeds:
     - 0
-#    - 1337
-#    - 6666
-#    - 95412
-#    - 121254
-#    - 4239238
-#    - 52911916
-#    - 115119111
-#    - 512812230
-  dnn_accuracy_lut_file: workloads/lut_a.csv
+    - 1337
+    - 6666
+    - 95412
+    - 121254
+    - 4239238
+    - 52911916
+    - 115119111
+    - 512812230
+  dnn_accuracy_lut_file: workloads/lut_b.csv
   scheduler_type: ours
   solver_type: mthggreedyregret
   skip_exploration: False
@@ -29,7 +29,7 @@ dnn_op_mode_args:
   test_timeloop_accelergy_mode: False
 
 workload_args:
-  workload_idx: ClassifiersA
+  workload_idx: ClassifiersB
   workers: 16
   batch_size: 32
   load_serialized: False
