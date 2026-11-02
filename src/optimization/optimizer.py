@@ -343,7 +343,7 @@ class AcceleratorOptimizer:
                 edp_dict[metric_key] += results.edp
                 completed += 1
 
-                if completed % 20 == 0 or completed == deferred_count:
+                if completed % 160 == 0 or completed == deferred_count:
                     logger.info(
                         f"Received results for seed={self.seed}, (accel,dnn)={metric_key}, id={results.id}, mappings_complete={completed}/{deferred_count}")
 
@@ -454,7 +454,8 @@ class AcceleratorOptimizer:
             t = self.Tmax * math.exp(Tfactor * step / self.steps)
             self.move()
             e = self.energy()
-
+            accepted_evaluations = self.step_results[:1] + [r for r in self .step_results if r.accepted]
+            accepted_evaluations = accepted_evaluations[:-1] if len(accepted_evaluations) > 1 else accepted_evaluations
             if e is None or self.latest_schedule is None:
                 e = math.inf
                 self.latest_penalty = 0
@@ -462,7 +463,7 @@ class AcceleratorOptimizer:
                 self.latest_penalty_details = None
             else:
                 self.latest_penalty_details = self.schedule_penalizer.penalize(e, self.latest_schedule,
-                                                                               self.step_results[:-1], self.with_stl)
+                                                                               accepted_evaluations, self.with_stl)
                 self.latest_penalty = self.latest_penalty_details.total_penalty
                 proposed_penalty: float = self.latest_penalty
 
@@ -473,7 +474,7 @@ class AcceleratorOptimizer:
             else:
                 self.previous_penalty_details = self.schedule_penalizer.penalize(
                     prev_energy, self.step_results[-1].schedule,
-                    self.step_results[:-1], self.with_stl)
+                    accepted_evaluations, self.with_stl)
                 current_penalty: float = self.previous_penalty_details.total_penalty
                 self.previous_penalty = current_penalty
             de = e + proposed_penalty - prev_energy - current_penalty

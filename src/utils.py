@@ -155,7 +155,7 @@ def logging_cfg(args):
         os.symlink(logdir, "latest_log_dir")
         os.symlink(log_filename, "latest_log_file")
     except OSError:
-        logger.debug("Failed to create symlinks to latest logs")
+        logger.warn("Failed to create symlinks to latest logs")
 
 
 def set_deterministic(seed):

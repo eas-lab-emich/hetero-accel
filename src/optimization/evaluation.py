@@ -33,7 +33,7 @@ class SchedulePenalizer:
         self.risk_threshold = 8
 
     def penalize(self, e, latest_schedule: Schedule, history, enabled) -> Penalty:
-        p1 = self.__compute_p1(latest_schedule, history) if latest_schedule and latest_schedule.assigned else 0 # FIXME across components, really should be setting penalty to inf rather than edp
+        p1 = self.__compute_p1(latest_schedule, history) if latest_schedule and latest_schedule.assigned else 0
         # p2 = self.__compute_p2(self.schedule_history)
         p2 = 0
         # p3 = self.__compute_p3(latest_schedule)

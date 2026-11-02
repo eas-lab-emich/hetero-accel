@@ -53,7 +53,7 @@ def main():
     """Main executing function, supporting the execution of either
        our optimization, or others for comparisons
     """
-    logging.basicConfig(level=logging.DEBUG)
+    logging.basicConfig(level=logging.INFO)
     args = env_cfg()
     args.logdir = logging.getLogger().logdir
     # TODO take the original pickle and just dump args in a json, yaml, or a general text file
