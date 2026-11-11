@@ -124,22 +124,8 @@ class AcceleratorOptimizer:
         self.schedule_penalizer = SchedulePenalizer(self.accuracy_lut)
 
         initial_state = self.get_initial_state()
-        self.initial_state = initial_state
         self.state = initial_state
-
-        # get baseline measurements
         self.under_eval_state = self.state
-        initial_metric = self.energy(initial=True)
-        self.initial_metric = initial_metric
-        self.initial_energy = self.latest_energy
-        self.initial_latency = self.latest_latency
-        self.initial_edp = self.latest_edp
-        self.initial_area = self.latest_area
-        logger.info("Initial results -> "
-                    f"Energy={self.initial_energy:.3e}, "
-                    f"Latency={self.initial_latency:.3e}, "
-                    f"EDP={self.initial_edp:.3e}, "
-                    f"Area={self.initial_area:.3e}")
 
         # user-defined annealing schedule
         self.Tmax = args.simanneal_Tmax
@@ -242,7 +228,6 @@ class AcceleratorOptimizer:
         logger.info(f"=> Move #{int(self.step)} taken. New state:")
         for state in self.under_eval_state:
             logger.info(f"\t{state}")
-        self.energy()
 
     def energy(self, initial=False):
         """Wrapper function for estimating the SA energy metric
@@ -252,7 +237,7 @@ class AcceleratorOptimizer:
         self.latest_evaluation_result = self._evaluation()
         logger.info(f"Completed state evaluation in {time() - start:.3e}s")
 
-        if self.latest_schedule is not None:
+        if self.latest_evaluation_result == EvaluationResult.SUCCESS:
             logger.info(f"Evaluation results:\n"
                         f"\tEnergy={self.latest_energy:.3e}\n"
                         f"\tLatency={self.latest_latency:.3e}\n"
@@ -276,6 +261,7 @@ class AcceleratorOptimizer:
             return deadline is not None and \
                 any(end_timestamp >= deadline for end_timestamp in schedule.end_timestamp.values())
 
+        # TODO re-enable with a configuration parameter
         def violated_area_constraint(area):
             return not (
                     getattr(self, 'initial_area', None) is None or
@@ -336,27 +322,23 @@ class AcceleratorOptimizer:
         completed = 0
         for deferred in as_completed(deferred_mappings):
             metric_key = deferred_mappings[deferred]
-            try:
-                results = deferred.result()
-                energy_dict[metric_key] += results.energy
-                latency_dict[metric_key] += results.cycles
-                edp_dict[metric_key] += results.edp
-                completed += 1
+            results = deferred.result()
+            energy_dict[metric_key] += results.energy
+            latency_dict[metric_key] += results.cycles
+            edp_dict[metric_key] += results.edp
+            completed += 1
 
-                if completed % 160 == 0 or completed == deferred_count:
-                    logger.info(
-                        f"Received results for seed={self.seed}, (accel,dnn)={metric_key}, id={results.id}, mappings_complete={completed}/{deferred_count}")
+            if completed % 160 == 0 or completed == deferred_count:
+                logger.info(
+                    f"Received results for seed={self.seed}, (accel,dnn)={metric_key}, id={results.id}, mappings_complete={completed}/{deferred_count}")
 
-                # store the accelerator area from the results of the last mapping
-                # all layers with the same accelerator should give the same area
-                _, accelerator = metric_key
-                if accelerator not in self.area_dict:
-                    self.area_dict[accelerator] = getattr(results, 'area', None)
-                    logger.info(f"\tSet accelerator area: {self.area_dict[accelerator]}")
-            except FileNotFoundError:  # TODO add specific exception
-                self.latest_schedule = self.latest_energy = self.latest_latency = None
-                logger.error(f"Invalid timeloop/accelergy simulation for {metric_key}")
-                return EvaluationResult.INVALID_SIMULATION  # TODO retry logic? Add cancel method to mapper?
+            # store the accelerator area from the results of the last mapping
+            # all layers with the same accelerator should give the same area
+            _, accelerator = metric_key
+            if accelerator not in self.area_dict:
+                self.area_dict[accelerator] = getattr(results, 'area', None)
+                logger.info(f"\tSet accelerator area: {self.area_dict[accelerator]}")
+
 
         for dnn_name, accelerator in energy_dict.keys():
             logger.debug(f"\t\tEvaluation results for {dnn_name} on {accelerator}:\n"
@@ -372,7 +354,7 @@ class AcceleratorOptimizer:
         logger.info("Completed mapping evaluation")
 
         self.latest_area = sum([self.area_dict[accelerator] for accelerator in self.under_eval_state])
-        # check the area constraint #TODO do we keep this long term or remove? It's a completely different objective...
+        # check the area constraint #TODO re-enable with config param
         # if violated_area_constraint(self.latest_area):
         #     self.latest_schedule = self.latest_energy = self.latest_latency = self.latest_edp = None
         #     logger.info("Violated area constraint")
@@ -438,15 +420,13 @@ class AcceleratorOptimizer:
 
         # Note initial state
         t = self.Tmax
-        e = self.energy()
+        e = self.energy(initial=True)
+        incumbent_schedule = self.latest_schedule
         prev_state = self.copy_state(self.state)
         self.previous_edp = prev_energy = e
         self.best_state = self.copy_state(self.state)
         self.best_energy = e
-        trials, accepts, improves = 0, 0, 0
-        if self.updates > 0:
-            update_wavelength = self.steps / self.updates
-            self.update(step, t, e, None, None)
+        self.update(step, t, e, None, None)
 
         # Attempt moves to new states
         while step < self.steps and not self.user_exit:
@@ -456,7 +436,7 @@ class AcceleratorOptimizer:
             e = self.energy()
             accepted_evaluations = self.step_results[:1] + [r for r in self .step_results if r.accepted]
             accepted_evaluations = accepted_evaluations[:-1] if len(accepted_evaluations) > 1 else accepted_evaluations
-            if e is None or self.latest_schedule is None:
+            if self.latest_evaluation_result != EvaluationResult.SUCCESS:
                 e = math.inf
                 self.latest_penalty = 0
                 proposed_penalty: float = self.latest_penalty
@@ -473,37 +453,34 @@ class AcceleratorOptimizer:
                 current_penalty: float = 0
             else:
                 self.previous_penalty_details = self.schedule_penalizer.penalize(
-                    prev_energy, self.step_results[-1].schedule,
+                    prev_energy, incumbent_schedule,
                     accepted_evaluations, self.with_stl)
                 current_penalty: float = self.previous_penalty_details.total_penalty
                 self.previous_penalty = current_penalty
+
+            self.previous_edp = prev_energy
             de = e + proposed_penalty - prev_energy - current_penalty
-            trials += 1
             acceptance_draw = self.rng.random()
+            accepted = False
+            improved = False
             if de > 0.0 and math.exp(-de / t) < acceptance_draw:
                 # Restore previous state
                 self.state = self.copy_state(prev_state)
                 e = prev_energy
             else:
-                # Accept new state and compare to best state
-                accepts += 1
-                if de < 0.0:
-                    improves += 1
+                accepted = True
+                improved = de < 0.0
                 prev_state = self.copy_state(self.state)
                 prev_energy = e
+                incumbent_schedule = self.latest_schedule
+
                 if e < self.best_energy:
                     self.best_state = self.copy_state(self.state)
                     self.best_energy = e
-            self.previous_edp = prev_energy
-            if self.updates > 1:
-                if (step // update_wavelength) > ((step - 1) // update_wavelength):
-                    self.update(
-                        step, t, e, accepts / trials, improves / trials)
-                    trials, accepts, improves = 0, 0, 0
+
+            self.update(step, t, e, accepted, improved)
 
         self.state = self.copy_state(self.best_state)
-
-        # Return best state and energy
         return self.best_state, self.best_energy
 
     def copy_state(self, state):
