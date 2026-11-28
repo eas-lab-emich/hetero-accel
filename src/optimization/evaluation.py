@@ -41,7 +41,7 @@ class SchedulePenalizer:
         penalty = 0
         for index, schedule in enumerate(eligible_schedules):
             budget_remainder = self.__budget_remainder(schedule)
-            base_penalty = max(0, budget_remainder - 10)
+            base_penalty = budget_remainder - 10 # no longer clipping
             penalty += np.exp(self.gamma * (index - len(eligible_schedules) + 1)) * base_penalty
         return penalty
 
